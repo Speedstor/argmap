@@ -31,8 +31,10 @@ aldrin@person ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJOp/UAYTX6pE/zVydAdoiNfXCeFGg
 # evidence and log entries in those commits.
 claude-fable-5.2@ai ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKy87HxSEheG8vEPhSs9u2KZCtVErAQfpmprtUJCZ2w7 init: Claude cloud workspace key that signed the commits that built the tool
 
-# The project key. "aldrin-tt" is short for Aldrin's Thinking Tools project,
-# where the private half is kept. Anyone who can open that project can sign
-# with it, so it shows access to the project, not which model or session did
-# the work. Work signed with it is recorded as by "aldrin-tt".
-aldrin-tt@ai ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOLiVDU+9ISXVbqMM4aAJOLNy4SIETT9g1VAByO9n64a project key: private half is in Aldrin's Thinking Tools project
+# The project key. Its name has three parts: the project (tt, for Thinking
+# Tools), the person whose project it is (aldrin), and a name the AI chose for
+# itself (surveyor: it maps what an argument rests on). The private half is
+# kept in that project, so anyone who can open the project can sign with it.
+# It shows access to the project, not which model or session did the work.
+# Work signed with it is recorded as by "tt-aldrin-surveyor".
+tt-aldrin-surveyor@ai ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOLiVDU+9ISXVbqMM4aAJOLNy4SIETT9g1VAByO9n64a project key: private half is in Aldrin's Thinking Tools project
