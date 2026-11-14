@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { analyze, nextSteps, REVIEWER_KINDS, toYaml, VERDICTS } from './index.ts';
 import type { ReviewerKind, Verdict } from './index.ts';
 import { Editor, EditError } from './edit.ts';
@@ -11,6 +11,7 @@ import { parseSigners, readSigners, verifyRange } from './verify.ts';
 import { git, isRepo, refExists } from './git.ts';
 import { parsePrivateKey, publicLine, SignError } from './sign.ts';
 import { fileURLToPath } from 'node:url';
+import { buildDigest } from './digest.ts';
 import { findRoot, loadFile } from './workspace.ts';
 import type { LoadedFile } from './workspace.ts';
 
@@ -33,6 +34,7 @@ Usage
   argmap use-key <private key file> Sign this clone's commits with that key (no ssh-keygen needed)
   argmap bundle <file>              Print the argument with its library claims inlined
   argmap view   <file> [-o out]     Write a self-contained HTML viewer
+  argmap digest [-o folder]         Write everything out as Markdown to read in one pass (default: dist/digest)
   argmap init   <file>              Write a starter argument file
 
 Claims not defined in an argument file are looked up in the nearest claims/ folder.
@@ -287,6 +289,19 @@ async function main(argv: string[]): Promise<number> {
       const ideas = ideasFor(loaded.root, argumentName(loaded.path), loaded.argument);
       writeFileSync(out, await buildViewer({ source: toYaml(loaded.argument), title: loaded.argument.title, ideas }));
       console.log(`Wrote ${out}`);
+      return 0;
+    }
+    case 'digest': {
+      const args = [file, ...rest].filter((a): a is string => !!a);
+      const out = resolve(option(args, '-o') ?? 'dist/digest');
+      const files = buildDigest(findRoot(process.cwd()));
+      for (const page of files) {
+        const path = join(out, page.path);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, page.content);
+      }
+      console.log(`Wrote ${files.length} files to ${out}`);
+      for (const page of files) console.log(`  ${page.path}`);
       return 0;
     }
     case 'init': {
