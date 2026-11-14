@@ -1,0 +1,62 @@
+# Approve and merge pull requests into the ideas branch, when they are from
+# someone with access to the repository and touch only notepad files.
+#
+# This runs on pull_request_target, so it uses this file as it is on the ideas
+# branch, never the copy in the pull request, and it never checks out or runs
+# code from the pull request.
+#
+# Needs one repository setting: Settings > Actions > General > Workflow
+# permissions > "Allow GitHub Actions to create and approve pull requests".
+name: Auto-approve ideas
+
+on:
+  pull_request_target:
+    branches: [ideas]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      REPO: ${{ github.repository }}
+      ASSOCIATION: ${{ github.event.pull_request.author_association }}
+    steps:
+      - name: Check who is asking and what changed
+        id: check
+        run: |
+          case "$ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR) ;;
+            *)
+              echo "The author does not have access to this repository. Leaving this for a person."
+              echo "ok=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+          if [ -z "$files" ]; then
+            echo "No files changed. Leaving this for a person."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          other=$(printf '%s\n' "$files" | grep -Ev '^ideas/[A-Za-z0-9._/-]+\.md$' || true)
+          if [ -n "$other" ]; then
+            echo "These files are not notepads, so this waits for a person:"
+            printf '%s\n' "$other"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: Approve
+        if: steps.check.outputs.ok == 'true'
+        run: gh pr review "$PR" --repo "$REPO" --approve --body "Notepad changes from someone with access are approved automatically."
+
+      - name: Merge
+        if: steps.check.outputs.ok == 'true'
+        run: gh pr merge "$PR" --repo "$REPO" --squash
