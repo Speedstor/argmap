@@ -220,7 +220,12 @@ async function main(argv: string[]): Promise<number> {
       for (const check of checks) {
         const fine = check.problems.length === 0;
         if (!fine) bad++;
-        console.log(`${fine ? '✓' : '✗'} ${check.commit.slice(0, 7)} ${check.signer ? `signed by ${check.signer.principal}${check.signer.label ? ` [${check.signer.label}]` : ''}` : 'no trusted signature'}  ${check.subject}`);
+        const who = check.signer
+          ? `signed by ${check.signer.principal}${check.signer.label ? ` [${check.signer.label}]` : ''}`
+          : check.merge === 'clean'
+            ? 'merge that adds nothing of its own'
+            : 'no trusted signature';
+        console.log(`${fine ? '✓' : '✗'} ${check.commit.slice(0, 7)} ${who}  ${check.subject}`);
         for (const problem of check.problems) console.log(`      ${problem}`);
       }
       console.log(`${checks.length - bad} of ${checks.length} commits in ${range} pass.`);

@@ -144,7 +144,34 @@ export interface CommitCheck {
   subject: string;
   /** Who signed it, when the signature is good and the key is on the list. */
   signer?: Signer;
+  /**
+   * Set on a commit with more than one parent. "clean": its files are exactly
+   * what git gets by combining its parents, so it adds nothing of its own.
+   * "edited": it differs from that, so somebody changed something in the merge.
+   */
+  merge?: 'clean' | 'edited';
   problems: string[];
+}
+
+/**
+ * Does a merge commit add anything of its own? It does not when its files are
+ * exactly what git produces by merging its two parents. Then every line in it
+ * comes from a commit that is checked separately, and it does not matter who
+ * pressed the merge button. GitHub signs its merges with its own key, and a
+ * workflow leaves them unsigned, so without this no merged pull request passes.
+ */
+export function mergeKind(root: string, commit: string, parents: string[]): { kind: 'clean' | 'edited'; why?: string } {
+  if (parents.length !== 2) return { kind: 'edited', why: `it has ${parents.length} parents, and only a merge of two can be checked` };
+  let merged: string;
+  try {
+    merged = git(root, ['merge-tree', '--write-tree', parents[0] as string, parents[1] as string]).split('\n')[0] ?? '';
+  } catch (e) {
+    // git exits with 1 when the two sides conflict, and with something else when it could not merge at all.
+    if ((e as { status?: number }).status === 1) return { kind: 'edited', why: 'its parents conflict, so somebody chose how to combine them' };
+    return { kind: 'edited', why: 'git could not redo the merge to compare (this needs git 2.38 or later, and the full history of both parents)' };
+  }
+  const actual = git(root, ['rev-parse', `${commit}^{tree}`]);
+  return merged === actual ? { kind: 'clean' } : { kind: 'edited', why: 'its files differ from what combining its parents gives' };
 }
 
 /** The list of trusted keys, taken from main so that a branch cannot add its own key. */
@@ -184,6 +211,11 @@ function added(before: string[], after: string[]): string[] {
  * Check a range of commits against the list of trusted keys. Each commit must
  * be signed by a listed key, and any review, evidence or log entry it adds must
  * be in the signer's own name: nobody can record a judgment as someone else.
+ *
+ * A merge that adds nothing of its own passes without a trusted signature (see
+ * mergeKind). A merge that was edited is treated like any other commit: it
+ * needs a trusted signature, and what it adds beyond its parents must be in the
+ * signer's name.
  */
 export function verifyRange(root: string, range: string, signers: Signer[]): CommitCheck[] {
   const commits = git(root, ['rev-list', '--reverse', range]).split('\n').filter(Boolean);
@@ -191,31 +223,51 @@ export function verifyRange(root: string, range: string, signers: Signer[]): Com
   const checks: CommitCheck[] = [];
   for (const commit of commits) {
     const check: CommitCheck = { commit, subject: git(root, ['log', '-1', '--format=%s', commit]), problems: [] };
+    const parents = git(root, ['log', '-1', '--format=%P', commit]).split(' ').filter(Boolean);
+    const merge = parents.length > 1 ? mergeKind(root, commit, parents) : undefined;
+    if (merge) check.merge = merge.kind;
+
+    const unsigned: string[] = [];
     const { payload, signature } = splitCommit(gitBuffer(root, ['cat-file', 'commit', commit]));
     if (!signature) {
-      check.problems.push('not signed');
+      unsigned.push('not signed');
     } else {
       const result = checkSshSignature(payload, signature);
-      if (!result.ok) check.problems.push(result.problem ?? 'bad signature');
+      if (!result.ok) unsigned.push(result.problem ?? 'bad signature');
       else {
         const signer = byKey.get(result.key as string);
         if (signer) check.signer = signer;
-        else check.problems.push('signed with a key that is not on the list');
+        else unsigned.push('signed with a key that is not on the list');
       }
+    }
+    if (merge?.kind !== 'clean') {
+      check.problems.push(...unsigned);
+      if (merge && unsigned.length > 0) check.problems.push(`this merge needs a trusted signature, because ${merge.why}`);
     }
 
     const signer = check.signer;
-    const parents = git(root, ['log', '-1', '--format=%P', commit]).split(' ').filter(Boolean);
-    if (signer && parents.length <= 1) {
-      const changed = git(root, ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', commit])
-        .split('\n')
-        .filter((path) => /^(arguments|claims)\/.*\.ya?ml$/.test(path));
+    if (signer && merge?.kind !== 'clean') {
+      // With -m a merge is compared with each parent in turn; an ordinary commit has one.
+      const changed = [
+        ...new Set(
+          git(root, ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-m', commit])
+            .split('\n')
+            .filter((path) => /^(arguments|claims)\/.*\.ya?ml$/.test(path)),
+        ),
+      ];
       for (const path of changed) {
         const read = (rev: string): RawFile | undefined => {
           const text = tryGit(root, ['show', `${rev}:${path}`]);
           return text === undefined ? undefined : parseFile(text, path);
         };
-        const before = recordsOf(parents[0] ? read(parents[0]) : undefined);
+        // What was already on record in any parent is not new, so a merge answers only for what it adds itself.
+        const before = { reviews: [] as string[], evidence: [] as string[], log: [] as string[] };
+        for (const parent of parents) {
+          const had = recordsOf(read(parent));
+          before.reviews.push(...had.reviews);
+          before.evidence.push(...had.evidence);
+          before.log.push(...had.log);
+        }
         const after = recordsOf(read(commit));
         for (const item of added(before.reviews, after.reviews)) {
           const [claim, by, kind] = JSON.parse(item) as [string, string, string];

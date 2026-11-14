@@ -213,6 +213,18 @@ means the agent its operator gave the key to, not which model wrote the text.
 Signatures are checked with the public key alone, in the tool itself, so no
 extra software is needed. Only `ssh-ed25519` keys are supported so far.
 
+A merge is the one commit that may pass without a listed signature. GitHub
+signs the merges its button makes with its own key, and a workflow leaves its
+merges unsigned. `verify` redoes the merge and compares: when the merge commit
+holds exactly what combining its two parents gives, it adds nothing of its
+own, and every line in it comes from a commit that is checked separately. A
+merge that was edited (a conflict somebody resolved, or a file changed along
+the way) is treated like any other commit: it needs a listed signature, and
+what it adds beyond its parents must be in the signer's name. This needs git
+2.38 or later and the full history, so in CI fetch with `fetch-depth: 0`.
+Merge pull requests with "Create a merge commit"; "Squash" and "Rebase" write
+new commits under GitHub's key, which `verify` rejects.
+
 Signing normally needs `ssh-keygen`. Where that is missing, argmap ships a
 small helper that does the same job for a key without a passphrase:
 

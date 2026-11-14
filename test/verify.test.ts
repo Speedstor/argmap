@@ -90,6 +90,10 @@ ca@person cert-authority ${stranger.listed}
 before(() => {
   root = mkdtempSync(join(tmpdir(), 'argmap-verify-'));
   run(['init', '-q', '-b', 'main']);
+  // The merge tests ask git to merge, which needs a name to write down.
+  run(['config', 'user.name', 'Tester']);
+  run(['config', 'user.email', 'tester@example.com']);
+  run(['config', 'commit.gpgsign', 'false']);
 });
 
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -160,4 +164,105 @@ test('a commit changed after signing no longer verifies', () => {
   const forged = run(['hash-object', '-t', 'commit', '-w', '--stdin'], `${raw}\n`);
   run(['update-ref', 'HEAD', forged]);
   assert.deepEqual(verifyRange(root, 'HEAD~1..HEAD', signers)[0]?.problems, ['signature does not match the commit']);
+});
+
+/** Make a commit with the given parents and tree, signed with `key` or unsigned, and move HEAD to it. */
+function mergeCommit(parents: string[], tree: string, subject: string, key?: Key): string {
+  const who = `Tester <tester@example.com> ${clock++} +0000`;
+  const head = `tree ${tree}\n${parents.map((p) => `parent ${p}\n`).join('')}author ${who}\ncommitter ${who}\n`;
+  const payload = `${head}\n${subject}\n`;
+  const raw = key ? `${head}gpgsig ${sshSignature(Buffer.from(payload), key).split('\n').join('\n ')}\n\n${subject}\n` : payload;
+  const id = run(['hash-object', '-t', 'commit', '-w', '--stdin'], raw);
+  run(['reset', '-q', '--hard', id]);
+  return id;
+}
+
+/** Two signed commits that start from the same place: one on each side of a merge. */
+function fork(left: Record<string, string>, right: Record<string, string>): { base: string; a: string; b: string } {
+  const base = commit({ 'notes.txt': 'base\n' }, 'base of a merge', ann);
+  const a = commit(left, 'left side', ann);
+  run(['reset', '-q', '--hard', base]);
+  const b = commit(right, 'right side', bot);
+  return { base, a, b };
+}
+
+const cleanTree = (a: string, b: string): string => run(['merge-tree', '--write-tree', a, b]).split('\n')[0] as string;
+
+test('a merge that adds nothing of its own passes without a trusted signature', () => {
+  const { base, a, b } = fork({ 'left.txt': 'left\n' }, { 'right.txt': 'right\n' });
+  // The way GitHub's merge button and a workflow leave it: unsigned, or signed with a key that is not listed.
+  for (const key of [undefined, stranger]) {
+    const id = mergeCommit([a, b], cleanTree(a, b), 'Merge pull request', key);
+    const checks = verifyRange(root, `${base}..HEAD`, signers);
+    assert.deepEqual(checks.map((c) => c.problems), [[], [], []]);
+    const merge = checks.find((c) => c.commit === id);
+    assert.equal(merge?.merge, 'clean');
+    assert.equal(merge?.signer, undefined);
+  }
+});
+
+test('the commits a merge brings in are still checked one by one', () => {
+  const base = commit({ 'notes.txt': 'base again\n' }, 'base of a merge', ann);
+  const a = commit({ 'left.txt': 'more\n' }, 'left side', ann);
+  run(['reset', '-q', '--hard', base]);
+  const b = commit({ 'right.txt': 'unsigned\n' }, 'unsigned side');
+  mergeCommit([a, b], cleanTree(a, b), 'Merge an unsigned branch');
+  const checks = verifyRange(root, `${base}..HEAD`, signers);
+  assert.deepEqual(checks.find((c) => c.commit === b)?.problems, ['not signed']);
+  assert.equal(checks.filter((c) => c.problems.length > 0).length, 1);
+});
+
+test('a merge that was edited needs a trusted signature', () => {
+  const { base, a, b } = fork({ 'left.txt': 'left 2\n' }, { 'right.txt': 'right 2\n' });
+  // Something slipped into the merge that neither side had.
+  run(['reset', '-q', '--hard', a]);
+  run(['merge', '-q', '--no-commit', '--no-ff', b]);
+  writeFileSync(join(root, 'extra.txt'), 'added in the merge\n');
+  run(['add', '-A']);
+  const edited = run(['write-tree']);
+  run(['merge', '--abort']);
+
+  const unsigned = mergeCommit([a, b], edited, 'Merge with an extra file');
+  let check = verifyRange(root, `${base}..HEAD`, signers).find((c) => c.commit === unsigned);
+  assert.equal(check?.merge, 'edited');
+  assert.equal(check?.problems[0], 'not signed');
+  assert.match(check?.problems[1] ?? '', /needs a trusted signature, because its files differ/);
+
+  const signed = mergeCommit([a, b], edited, 'Merge with an extra file, signed', ann);
+  check = verifyRange(root, `${base}..HEAD`, signers).find((c) => c.commit === signed);
+  assert.equal(check?.merge, 'edited');
+  assert.equal(check?.signer?.principal, 'ann@person');
+  assert.deepEqual(check?.problems, []);
+});
+
+test('a merge whose sides conflict needs a trusted signature', () => {
+  const { base, a, b } = fork({ 'same.txt': 'one way\n' }, { 'same.txt': 'another way\n' });
+  const resolved = run(['rev-parse', `${a}^{tree}`]);
+  const id = mergeCommit([a, b], resolved, 'Merge, keeping the left side');
+  const check = verifyRange(root, `${base}..HEAD`, signers).find((c) => c.commit === id);
+  assert.match(check?.problems[1] ?? '', /because its parents conflict/);
+  const signed = mergeCommit([a, b], resolved, 'Merge, keeping the left side, signed', bot);
+  assert.deepEqual(verifyRange(root, `${base}..HEAD`, signers).find((c) => c.commit === signed)?.problems, []);
+});
+
+test('an edited merge answers for the records it adds, and not for those its parents had', () => {
+  const review = (by: string, kind: string): string => `      - { by: ${by}, kind: ${kind}, verdict: confirm }\n`;
+  const { base, a, b } = fork(
+    { 'claims/merge-a.yaml': claims(`    reviews:\n${review('ann', 'person')}`).replace('fact:', 'fact-a:') },
+    { 'claims/merge-b.yaml': claims(`    reviews:\n${review('model-x', 'ai')}`).replace('fact:', 'fact-b:') },
+  );
+  run(['reset', '-q', '--hard', a]);
+  run(['merge', '-q', '--no-commit', '--no-ff', b]);
+  // The model merges, and writes a review as ann while doing it.
+  writeFileSync(
+    join(root, 'claims/merge-b.yaml'),
+    claims(`    reviews:\n${review('model-x', 'ai')}      - { by: ann, kind: person, verdict: reject, note: forged }\n`).replace('fact:', 'fact-b:'),
+  );
+  run(['add', '-A']);
+  const forged = run(['write-tree']);
+  run(['merge', '--abort']);
+  const id = mergeCommit([a, b], forged, 'Merge, with a forged review', bot);
+  const check = verifyRange(root, `${base}..HEAD`, signers).find((c) => c.commit === id);
+  assert.equal(check?.problems.length, 1);
+  assert.match(check?.problems[0] ?? '', /a review of "fact-b" is recorded as by "ann", but the commit was signed by model-x@ai/);
 });
