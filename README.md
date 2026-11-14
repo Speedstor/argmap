@@ -96,6 +96,8 @@ keys and what each name has on record.
 `.github/workflows/ci.yml` runs the type check and the tests on every pull
 request and every push to `main`. From `main` it also writes the digest to the
 `digest` branch, so it can be read without cloning or installing anything.
+In this repository, which holds the tool only, it also fails when a file sits
+under `arguments/` or `claims/`. A copy skips that check.
 
 ## Keep a private copy
 

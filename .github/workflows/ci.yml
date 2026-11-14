@@ -4,6 +4,9 @@
 # prove it still builds, and run "argmap verify" on the commits the pull request
 # adds, using the checker from main. Nothing is published.
 #
+# In the public repository, which holds the tool only, the run also fails when
+# a file sits under arguments/ or claims/. A copy skips that check.
+#
 # On a push to main the pushed commits are verified as well, with the checker
 # and the trusted keys from before the push.
 #
@@ -43,6 +46,20 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # The public repository is the tool only. Arguments and claims belong in a
+      # copy, so a file under arguments/ or claims/ here is most likely thinking
+      # that was meant to stay somewhere else. This is an alarm and not a lock: by
+      # the time it runs, the branch has already been pushed. A copy skips it,
+      # because a copy is where those files go. It tells itself apart the way the
+      # update workflow does.
+      - name: Keep arguments and claims out of the tool's repository
+        if: github.repository == (vars.ARGMAP_UPSTREAM || 'Speedstor/argmap')
+        run: |
+          found=$(git ls-files -- arguments claims)
+          if [ -n "$found" ]; then
+            echo "::error::This repository holds the tool only. These belong in a copy: $(echo $found)"
+            exit 1
+          fi
       - name: Build the digest
         run: node bin/argmap.mjs digest -o _digest
       # Every commit the pull request adds must be signed by a listed key, in the
