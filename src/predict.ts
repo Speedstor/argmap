@@ -118,6 +118,14 @@ export interface ClaimRecord {
   failedEarlier: number;
 }
 
+/**
+ * A test is the claim's own when its setter accepted it or vouches for the claim. verify makes a voucher
+ * accept their own test when they set it, so a voucher cannot pass an easy test off as someone else's.
+ */
+function isOwn(prediction: Prediction, backers: ReadonlySet<string>): boolean {
+  return prediction.accepted.some((a) => a.by === prediction.by) || backers.has(prediction.by);
+}
+
 export function claimRecord(claim: Claim): ClaimRecord {
   const rev = claimRev(claim);
   const backers = new Set(vouchers(claim));
@@ -128,9 +136,7 @@ export function claimRecord(claim: Claim): ClaimRecord {
       if (p.outcome === 'no') record.failedEarlier++;
       continue;
     }
-    // A test is the claim's own when its setter accepted it or vouches for the claim. verify makes a voucher
-    // accept their own test when they set it, so a voucher cannot pass an easy test off as someone else's.
-    const own = p.accepted.some((a) => a.by === p.by) || backers.has(p.by);
+    const own = isOwn(p, backers);
     if (!own) {
       record.offered++;
       if (p.accepted.length > 0) record.offeredAccepted++;
@@ -223,6 +229,23 @@ export function predictionIssues(arg: Argument): Issue[] {
         warn('test-one-case', `${name} looks at one case, but "${claim.id}" is about many. Fix a sample and how many must agree before looking.`, claim.id);
       }
     });
+    // A claim that has only passed tests its own side chose. A measure picked by whoever it rewards stops
+    // measuring what it was meant to (Goodhart's law), and the remedy is a second measure that someone else
+    // sets to catch what the first one misses: https://amirsohil.github.io/goodhartslaw.html
+    // Here the second measure is a test from someone who does not vouch for the claim. The warning only
+    // points: it sets no label and changes no status. It stays quiet once a test has failed, or while a
+    // test from someone else has been accepted and is waiting for its outcome.
+    const record = claimRecord(claim);
+    const names = new Set(backers);
+    const outsideUnderWay = claim.predictions.some((p) => isCurrent(claim, p, rev) && p.outcome === undefined && p.accepted.length > 0 && !isOwn(p, names));
+    if (record.passed > 0 && record.passedFromOthers === 0 && record.failed === 0 && !outsideUnderWay) {
+      const setters = [...new Set(claim.predictions.filter((p) => isCurrent(claim, p, rev) && p.outcome === 'yes' && couldKnock(p)).map((p) => p.by))];
+      warn(
+        'test-own-only',
+        `"${claim.id}" has passed ${record.passed === 1 ? '1 test' : `${record.passed} tests`} that could have knocked it out, and its own side set ${record.passed === 1 ? 'it' : 'them all'} (${setters.join(', ')}). Whoever wants a pass tends to pick a test the claim will pass. Someone who does not vouch for it should set one, aimed at what the claim may be leaving out.`,
+        claim.id,
+      );
+    }
   }
   return issues;
 }
