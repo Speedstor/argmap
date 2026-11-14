@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +17,9 @@ before(async () => {
   root = mkdtempSync(join(tmpdir(), 'argmap-'));
   cpSync(join(repo, 'test/fixtures/arguments'), join(root, 'arguments'), { recursive: true });
   cpSync(join(repo, 'test/fixtures/claims'), join(root, 'claims'), { recursive: true });
+  for (const args of [['init', '-q', '-b', 'main'], ['config', 'user.name', 'Tester'], ['config', 'user.email', 't@example.com'], ['config', 'commit.gpgsign', 'false'], ['add', '-A'], ['commit', '-q', '-m', 'start']]) {
+    execFileSync('git', ['-C', root, ...args]);
+  }
   client = new Client({ name: 'argmap-test', version: '0' });
   await client.connect(
     new StdioClientTransport({
@@ -47,7 +51,7 @@ const file = (path: string): string => readFileSync(join(root, path), 'utf8');
 
 test('the server lists its tools and the arguments in the workspace', async () => {
   const { tools } = await client.listTools();
-  assert.ok(tools.length >= 13);
+  assert.ok(tools.length >= 17);
   const { json } = await call('list_arguments');
   assert.deepEqual(json, [
     { argument: `arguments/${ARG}.yaml`, title: 'Could a collapsed civilization industrialize a second time?', conclusion: 'contested' },
@@ -164,4 +168,55 @@ test('create_argument starts a new file that can be built out', async () => {
   });
   assert.ok(!refined.error, refined.text);
   assert.equal((await call('list_arguments')).json.length, 2);
+});
+
+test('evidence is attached without changing the trust label', async () => {
+  const id = 'oil-needs-deep-drilling';
+  const added = await call('add_evidence', {
+    argument: ARG,
+    id,
+    kind: 'statistic',
+    says: 'Average new well depth passed 2,000 m.',
+    value: 2000,
+    unit: 'm',
+    period: '2010',
+    source: 'https://example.com/wells',
+    by: 'tester',
+  });
+  assert.ok(!added.error, added.text);
+  assert.ok(added.json.warnings.some((w: string) => w.includes(id) && w.includes('only one independent source')));
+  const claim = (await call('get_claim', { argument: ARG, id })).json;
+  assert.equal(claim.bet.trust, 'corroborated');
+  assert.equal(claim.evidence.length, 1);
+  assert.equal(claim.evidence[0].by, 'tester');
+  assert.equal(claim.independentSources, 1);
+  assert.ok(file('claims/energy-and-industry.yaml').includes('value: 2000'));
+  const bad = await call('add_evidence', { argument: ARG, id, kind: 'paper', says: ' ', by: 'tester' });
+  assert.ok(bad.error);
+});
+
+test('notepads are created on request, live on the ideas branch, and are read without a merge', async () => {
+  const none = (await call('read_ideas', { argument: ARG })).json;
+  assert.deepEqual(none.notepads, []);
+  const early = await call('add_idea', { argument: ARG, text: 'Too early.', by: 'tester' });
+  assert.ok(early.error);
+  assert.match(early.text, /created on request/);
+
+  const made = await call('create_notepad', { argument: ARG, by: 'tester' });
+  assert.ok(!made.error, made.text);
+  assert.equal(made.json.notepad, `ideas/${ARG}.md`);
+  await call('add_idea', { argument: ARG, text: 'What about peat? [[easy-coal-mined-out]]', by: 'tester' });
+  await call('add_idea', { argument: ARG, text: 'Tidal mills.', related: true, by: 'model-x' });
+  await call('create_notepad', { argument: ARG, claim: 'same-inputs', by: 'tester' });
+  await call('add_idea', { argument: ARG, claim: 'same-inputs', text: 'Is this even one claim?', by: 'tester' });
+
+  const ideas = (await call('read_ideas', { argument: ARG })).json;
+  assert.equal(ideas.notepads.length, 2);
+  assert.equal(ideas.byClaim['easy-coal-mined-out'][0].text, 'What about peat? [[easy-coal-mined-out]]');
+  assert.equal(ideas.byClaim['same-inputs'][0].text, 'Is this even one claim?');
+  assert.deepEqual(ideas.related.map((i: { text: string }) => i.text), ['Tidal mills.']);
+  const git = (...args: string[]): string => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
+  assert.equal(git('branch', '--show-current'), 'main');
+  assert.ok(!git('ls-tree', '-r', '--name-only', 'main').includes('ideas/'));
+  assert.ok(git('ls-tree', '-r', '--name-only', 'ideas').includes(`ideas/${ARG}.md`));
 });

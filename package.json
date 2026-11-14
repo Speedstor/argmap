@@ -1,6 +1,6 @@
 {
   "name": "argmap",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A build system for beliefs: map an argument, see what it rests on, and see what falls when a bet fails.",
   "type": "module",
   "license": "MIT",

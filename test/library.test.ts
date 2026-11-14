@@ -119,7 +119,10 @@ claims:
     reviews: [{ by: model, kind: ai, verdict: reject }]
   vague: { text: Most things mostly work., bet: assumed }
   unchecked: { text: A claim about 1902., bet: assumed }
-  checked: { text: A claim about 1903., bet: observed }
+  checked:
+    text: A claim about 1903.
+    bet: observed
+    evidence: [{ kind: account, says: I saw it., witness: me, first_hand: true }]
 `,
     [],
   );

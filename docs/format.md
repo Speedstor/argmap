@@ -118,6 +118,42 @@ library claim just by naming its id. When an argument is loaded:
 `argmap bundle <file>` prints the argument with everything it drew from the
 library inlined, as one self-contained file.
 
+## Evidence
+
+```yaml
+claims:
+  some-bet:
+    text: ...
+    bet: { trust: corroborated }
+    evidence:
+      - kind: statistic         # statistic | account | paper | reference
+        stance: for             # for (default) | against
+        says: Brazil produces about 10 million tonnes of pig iron a year using charcoal.
+        value: 10
+        unit: Mt per year
+        sample: Brazilian pig iron made with charcoal
+        period: about 2007
+        source: https://fao.org/4/i1321e/i1321e04.pdf
+        origin: ...             # optional: the underlying work, if the source reports on it
+        by: aldrin
+        date: 2026-11-14
+      - kind: account
+        says: The pit was worked by hand to about 15 m.
+        witness: J. Smith, miner
+        first_hand: true
+      - kind: paper
+        says: ...
+        source: doi:10.1000/example
+        peer_reviewed: true
+```
+
+`says` is required. Records with the same `origin` (or, without one, the same
+`source`) count as one independent source. The trust label stays typed; the
+engine warns with `trust-unbacked` when the label claims more than the
+attached evidence shows, with `evidence-against` when a trusted bet has
+evidence against it, and with `evidence-unsourced` when a record gives nothing
+to look up.
+
 ## Reviews
 
 ```yaml
@@ -148,7 +184,7 @@ changes whether a claim stands; a split claim waits for adjudication.
 log:
   - at: 2026-11-13
     by: claude-fable-5.2
-    did: refine             # create, add, refine, rewire, reword, check, review, attack, dispute
+    did: refine             # create, add, refine, rewire, reword, check, evidence, review, attack, dispute
     claim: easy-coal-mined-out
     note: Why the change was made.
     verdict: contested      # the conclusion after this round

@@ -4,7 +4,11 @@ import { analyze, nextSteps, REVIEWER_KINDS, toYaml, VERDICTS } from './index.ts
 import type { ReviewerKind, Verdict } from './index.ts';
 import { Editor, EditError } from './edit.ts';
 import { formatIssues, formatKnock, formatReport, formatSteps, toJson } from './report.ts';
+import { addIdea, createNotepad, ideasFor, IdeasError } from './ideas.ts';
+import type { Idea } from './ideas.ts';
 import { searchClaims } from './search.ts';
+import { parseSigners, readSigners, verifyRange } from './verify.ts';
+import { refExists } from './git.ts';
 import { findRoot, loadFile } from './workspace.ts';
 import type { LoadedFile } from './workspace.ts';
 
@@ -17,6 +21,13 @@ Usage
   argmap knock  <file> <id>...      What changes if these claims fail
   argmap review <file> <id> confirm|reject --by <name> [--ai] [--note <text>]
   argmap search <words>...          Find claims in the library and every argument
+  argmap ideas  <file>              Show the notepads for an argument (read from the ideas branch)
+  argmap notepad <file> [--claim <id>] --by <name>
+                                    Start a notepad for the argument, or for one claim
+  argmap idea   <file> "<text>" [--claim <id>] [--related] --by <name>
+                                    Add a note to a notepad
+  argmap verify [<range>] [--signers <file>]
+                                    Check commits are signed by a listed key, in the signer's own name
   argmap bundle <file>              Print the argument with its library claims inlined
   argmap view   <file> [-o out]     Write a self-contained HTML viewer
   argmap init   <file>              Write a starter argument file
@@ -77,6 +88,10 @@ function open(file: string | undefined): LoadedFile {
   return loadFile(file);
 }
 
+function argumentName(path: string): string {
+  return basename(path).replace(/\.ya?ml$/, '');
+}
+
 function option(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   return i !== -1 ? args[i + 1] : undefined;
@@ -134,6 +149,78 @@ async function main(argv: string[]): Promise<number> {
       }
       return 0;
     }
+    case 'ideas': {
+      const loaded = open(file);
+      if (!loaded.argument) {
+        console.log(formatIssues(loaded.issues));
+        return 1;
+      }
+      const ideas = ideasFor(loaded.root, argumentName(loaded.path), loaded.argument);
+      if (ideas.notepads.length === 0) {
+        console.log('No notepad yet. Start one with: argmap notepad <file> --by <name>');
+        return 0;
+      }
+      const show = (title: string, list: Idea[]): void => {
+        if (list.length === 0) return;
+        console.log(`\n${title}`);
+        for (const idea of list) console.log(`  - ${idea.text}${idea.by ? `  (${idea.by}${idea.date ? `, ${idea.date}` : ''})` : ''}`);
+      };
+      console.log(`Notepads: ${ideas.notepads.map((n) => n.path).join(', ')}`);
+      show('Notes', ideas.general);
+      for (const [id, list] of Object.entries(ideas.byClaim)) show(`On ${id}`, list.filter((i) => !i.related));
+      show('Related ideas', ideas.related);
+      if (ideas.url) console.log(`\nOpen it: ${ideas.url}`);
+      return 0;
+    }
+    case 'notepad':
+    case 'idea': {
+      const loaded = open(file);
+      const by = option(rest, '--by');
+      if (!loaded.argument || !by) fail(USAGE);
+      const claim = option(rest, '--claim');
+      if (claim && !loaded.argument.claims.has(claim)) fail(`Unknown claim id: ${claim}`);
+      const scope = claim ? 'claim' : 'argument';
+      const name = claim ?? argumentName(loaded.path);
+      try {
+        if (command === 'notepad') {
+          const title = claim ? `${loaded.argument.claims.get(claim)?.label ?? claim}` : loaded.argument.title;
+          const made = createNotepad(loaded.root, scope, name, title, by);
+          console.log(`Started ${made.path} on the ideas branch. Share it with: git push origin ideas`);
+        } else {
+          const text = rest[0];
+          if (!text || text.startsWith('--')) fail(USAGE);
+          const made = addIdea(loaded.root, scope, name, text, { related: rest.includes('--related'), by });
+          console.log(`Added to ${made.path} on the ideas branch. Share it with: git push origin ideas`);
+        }
+        return 0;
+      } catch (e) {
+        if (e instanceof IdeasError) fail(e.message);
+        throw e;
+      }
+    }
+    case 'verify': {
+      const args = [file, ...rest].filter((a): a is string => !!a);
+      const explicit = option(args, '--signers');
+      const root = findRoot(process.cwd());
+      const range = args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--signers') ?? (refExists(root, 'origin/main') ? 'origin/main..HEAD' : 'HEAD');
+      const list = readSigners(root, explicit);
+      const signers = parseSigners(list.text);
+      console.log(`Trusted keys: ${signers.length}, read from ${list.from}`);
+      if (signers.length === 0) {
+        console.log('The list is empty, so no commit can be attributed to anyone. Add public keys to allowed_signers on main.');
+        return 1;
+      }
+      const checks = verifyRange(root, range, signers);
+      let bad = 0;
+      for (const check of checks) {
+        const fine = check.problems.length === 0;
+        if (!fine) bad++;
+        console.log(`${fine ? '✓' : '✗'} ${check.commit.slice(0, 7)} ${check.signer ? `signed by ${check.signer.principal}` : 'no trusted signature'}  ${check.subject}`);
+        for (const problem of check.problems) console.log(`      ${problem}`);
+      }
+      console.log(`${checks.length - bad} of ${checks.length} commits in ${range} pass.`);
+      return bad === 0 ? 0 : 1;
+    }
     case 'bundle': {
       const loaded = open(file);
       if (!loaded.argument) {
@@ -166,7 +253,8 @@ async function main(argv: string[]): Promise<number> {
       const { buildViewer } = await import('../scripts/build.mjs');
       mkdirSync(dirname(out), { recursive: true });
       // The page is self-contained, so library claims are inlined.
-      writeFileSync(out, await buildViewer({ source: toYaml(loaded.argument), title: loaded.argument.title }));
+      const ideas = ideasFor(loaded.root, argumentName(loaded.path), loaded.argument);
+      writeFileSync(out, await buildViewer({ source: toYaml(loaded.argument), title: loaded.argument.title, ideas }));
       console.log(`Wrote ${out}`);
       return 0;
     }

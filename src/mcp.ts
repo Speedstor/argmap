@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -8,6 +8,8 @@ import type { EditResult, NewClaim } from './edit.ts';
 import {
   analyze,
   COST_LEVELS,
+  EVIDENCE_KINDS,
+  independentSources,
   knockOut,
   lintClaim,
   nextSteps,
@@ -15,10 +17,12 @@ import {
   reason,
   REVIEWER_KINDS,
   reviewSummary,
+  STANCES,
   TRUST_LEVELS,
   VERDICTS,
 } from './index.ts';
-import type { Argument } from './index.ts';
+import type { Argument, Evidence } from './index.ts';
+import { addIdea, createNotepad, ideasFor, IdeasError } from './ideas.ts';
 import { toJson } from './report.ts';
 import { searchClaims } from './search.ts';
 import { ARGUMENTS_DIR, argumentFiles, loadFile } from './workspace.ts';
@@ -42,7 +46,7 @@ function guard<A>(body: (args: A) => unknown): (args: A) => Promise<Result> {
     try {
       return ok(body(args));
     } catch (e) {
-      if (e instanceof EditError || e instanceof UserError) return failure(e.message);
+      if (e instanceof EditError || e instanceof UserError || e instanceof IdeasError) return failure(e.message);
       return failure(`Unexpected error: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
@@ -168,6 +172,8 @@ server.registerTool(
       bet: claim.bet,
       ifItFails: a.bets.find((b) => b.id === id)?.conclusionIfFails,
       sharpen: claim.bet ? lintClaim(claim).map((f) => f.message) : [],
+      evidence: claim.evidence,
+      independentSources: independentSources(claim),
       review: { state: review.state, current: review.current, stale: review.stale },
       note: claim.note,
     };
@@ -197,6 +203,57 @@ server.registerTool(
     const base = analyze(arg).conclusion;
     const { statuses, changes } = knockOut(arg, new Set(), ids);
     return { conclusionBefore: base, conclusionAfter: statuses.get(arg.conclusion), changes };
+  }),
+);
+
+/* ---------- Notepads ---------- */
+
+const claimOption = z.string().optional().describe('A claim id, to use that claim\'s own notepad instead of the argument\'s.');
+
+function notepadTarget(name: string, claim?: string): { loaded: ReturnType<typeof open>; scope: 'argument' | 'claim'; target: string } {
+  const loaded = open(name);
+  if (claim && !loaded.argument.claims.has(claim)) throw new UserError(`No claim "${claim}" in this argument.`);
+  return { loaded, scope: claim ? 'claim' : 'argument', target: claim ?? basename(loaded.path).replace(/\.ya?ml$/, '') };
+}
+
+server.registerTool(
+  'read_ideas',
+  {
+    description:
+      'Read the notepads for an argument: loose thinking that is not part of the argument and never affects its verdict. Returns notes tied to each claim, general notes, and the closing list of related ideas, which are the thoughts most ready to become claims. Notepads live on the ideas branch and are read without merging it.',
+    inputSchema: { argument },
+  },
+  guard(({ argument: name }: { argument: string }) => {
+    const { loaded, target } = notepadTarget(name);
+    return ideasFor(ROOT, target, loaded.argument);
+  }),
+);
+
+server.registerTool(
+  'create_notepad',
+  {
+    description: 'Start a notepad for an argument, or for one claim. Notepads are only created on request. It is committed to the ideas branch; main is not touched.',
+    inputSchema: { argument, claim: claimOption, by },
+  },
+  guard(({ argument: name, claim, by: who }: { argument: string; claim?: string; by: string }) => {
+    const { loaded, scope, target } = notepadTarget(name, claim);
+    const title = claim ? (loaded.argument.claims.get(claim)?.label ?? claim) : loaded.argument.title;
+    const made = createNotepad(ROOT, scope, target, title, who);
+    return { notepad: made.path, branch: 'ideas', share: 'git push origin ideas' };
+  }),
+);
+
+server.registerTool(
+  'add_idea',
+  {
+    description:
+      'Add a note to a notepad. Anything goes: a hunch, an analogy, a what-if. Mention a claim as [[claim-id]] to tie the note to it. Set related to true for a thought that could become a new claim; those are listed at the end of the page. To turn an idea into a claim, use add_claim or refine_claim, where it will be held to the usual standard.',
+    inputSchema: { argument, claim: claimOption, text: z.string().min(1), related: z.boolean().optional(), by },
+  },
+  guard(({ argument: name, claim, text, related, by: who }: { argument: string; claim?: string; text: string; related?: boolean; by: string }) => {
+    const { scope, target } = notepadTarget(name, claim);
+    const made = addIdea(ROOT, scope, target, text, { related: related === true, by: who });
+    return { notepad: made.path, branch: 'ideas', share: 'git push origin ideas' };
   }),
 );
 
@@ -300,6 +357,40 @@ server.registerTool(
     if (a.note) bet.note = a.note;
     if (a.cost) bet.cost = a.cost;
     return describeEdit(new Editor(argumentPath(a.argument), ROOT).setBet(a.id, bet).save({ by: a.by, did: 'check', claim: a.id, note: `trust: ${a.trust}` }));
+  }),
+);
+
+server.registerTool(
+  'add_evidence',
+  {
+    description:
+      'Attach evidence to a claim: a statistic (a measured figure), an account (what someone saw or did), a paper (a published study), or a reference (any other secondary source). Evidence can count for or against the claim. Only record what was actually read or measured, and give a source someone else can open. This does not change the trust label: use set_bet for that, after judging the evidence. Two records that rest on the same underlying work should share an "origin", so they are not counted as independent.',
+    inputSchema: {
+      argument,
+      id: z.string(),
+      kind: z.enum(EVIDENCE_KINDS),
+      stance: z.enum(STANCES).optional().describe('Whether it counts for or against the claim. Default: for.'),
+      says: z.string().describe('What it shows, in one sentence.'),
+      source: z.string().optional().describe('A URL, DOI or full citation.'),
+      origin: z.string().optional().describe('What this ultimately rests on, if it is not the source itself (e.g. the study a news article reports).'),
+      value: z.union([z.number(), z.string()]).optional().describe('For a statistic: the figure.'),
+      unit: z.string().optional(),
+      sample: z.string().optional().describe('For a statistic: what was measured, and how many.'),
+      period: z.string().optional().describe('For a statistic: when it was measured.'),
+      witness: z.string().optional().describe('For an account: who saw or did it.'),
+      first_hand: z.boolean().optional().describe('For an account: true if the witness reports their own experience.'),
+      peer_reviewed: z.boolean().optional().describe('For a paper.'),
+      by,
+    },
+  },
+  guard((a: { argument: string; id: string; kind: Evidence['kind']; stance?: Evidence['stance']; says: string; source?: string; origin?: string; value?: number | string; unit?: string; sample?: string; period?: string; witness?: string; first_hand?: boolean; peer_reviewed?: boolean; by: string }) => {
+    const evidence: Evidence = { kind: a.kind, stance: a.stance ?? 'for', says: a.says, by: a.by };
+    for (const key of ['source', 'origin', 'unit', 'sample', 'period', 'witness'] as const) if (a[key]) evidence[key] = a[key];
+    if (a.value !== undefined) evidence.value = a.value;
+    if (a.first_hand !== undefined) evidence.firstHand = a.first_hand;
+    if (a.peer_reviewed !== undefined) evidence.peerReviewed = a.peer_reviewed;
+    const entry = { by: a.by, did: 'evidence', claim: a.id, note: `${evidence.stance === 'against' ? 'Against' : 'For'} (${a.kind}): ${a.says}` };
+    return describeEdit(new Editor(argumentPath(a.argument), ROOT).addEvidence(a.id, evidence).save(entry));
   }),
 );
 

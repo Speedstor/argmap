@@ -1,7 +1,7 @@
 import { parse as parseYaml } from 'yaml';
 import { termKeys } from './terms.ts';
-import { COST_LEVELS, REVIEWER_KINDS, TRUST_LEVELS, VERDICTS } from './types.ts';
-import type { Argument, Attack, Bet, Claim, Cost, Issue, LogEntry, Review, ReviewerKind, Status, Term, Trust, Verdict } from './types.ts';
+import { COST_LEVELS, EVIDENCE_KINDS, REVIEWER_KINDS, STANCES, TRUST_LEVELS, VERDICTS } from './types.ts';
+import type { Argument, Attack, Bet, Claim, Cost, Evidence, EvidenceKind, Issue, LogEntry, Review, ReviewerKind, Stance, Status, Term, Trust, Verdict } from './types.ts';
 
 export interface ParseResult {
   /** Present unless the file is too broken to read at all. */
@@ -170,6 +170,43 @@ function parseReviews(raw: unknown, id: string, issues: Issue[]): Review[] {
   return out;
 }
 
+function parseEvidence(raw: unknown, id: string, issues: Issue[]): Evidence[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    issues.push(err('evidence-shape', `"${id}": evidence must be a list.`, [id]));
+    return [];
+  }
+  const out: Evidence[] = [];
+  for (const entry of raw) {
+    if (!isDict(entry)) {
+      issues.push(err('evidence-shape', `"${id}": each piece of evidence must be a mapping with kind and says.`, [id]));
+      continue;
+    }
+    const kind = entry['kind'];
+    const says = asText(entry['says']);
+    const stance = entry['stance'] ?? 'for';
+    if (!(EVIDENCE_KINDS as readonly unknown[]).includes(kind) || !says) {
+      issues.push(err('evidence-shape', `"${id}": evidence needs a kind (${EVIDENCE_KINDS.join(', ')}) and "says": what it shows.`, [id]));
+      continue;
+    }
+    if (!(STANCES as readonly unknown[]).includes(stance)) {
+      issues.push(err('evidence-shape', `"${id}": an evidence stance must be ${STANCES.join(' or ')}.`, [id]));
+      continue;
+    }
+    const item: Evidence = { kind: kind as EvidenceKind, stance: stance as Stance, says };
+    for (const key of ['source', 'origin', 'by', 'date', 'unit', 'sample', 'period', 'witness'] as const) {
+      const text = asText(entry[key]);
+      if (text) item[key] = text;
+    }
+    const value = entry['value'];
+    if (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) item.value = value;
+    if (typeof entry['first_hand'] === 'boolean') item.firstHand = entry['first_hand'];
+    if (typeof entry['peer_reviewed'] === 'boolean') item.peerReviewed = entry['peer_reviewed'];
+    out.push(item);
+  }
+  return out;
+}
+
 function parseLog(raw: unknown, issues: Issue[]): LogEntry[] {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) {
@@ -312,6 +349,7 @@ export function parseFile(source: string, name = ''): RawFile {
       let bet: Bet | undefined;
       let note: string | undefined;
       let reviews: Review[] = [];
+      let evidence: Evidence[] = [];
       let label = prettyLabel(id);
       if (typeof value === 'string') {
         text = value.trim();
@@ -320,6 +358,7 @@ export function parseFile(source: string, name = ''): RawFile {
         because = parseBecause(value['because'], id, issues);
         bet = parseBet(value['bet'], id, issues);
         reviews = parseReviews(value['reviews'], id, issues);
+        evidence = parseEvidence(value['evidence'], id, issues);
         note = asText(value['note']);
         if (typeof value['label'] === 'string' && value['label'].trim() !== '') label = value['label'].trim();
       } else {
@@ -330,7 +369,7 @@ export function parseFile(source: string, name = ''): RawFile {
         issues.push(err('claim-text', `"${id}" has no text.`, [id]));
         text = id;
       }
-      const claim: Claim = { id, label, text, because, reviews, origin: name };
+      const claim: Claim = { id, label, text, because, reviews, evidence, origin: name };
       if (bet) claim.bet = bet;
       if (note) claim.note = note;
       raw.claims.set(id, claim);

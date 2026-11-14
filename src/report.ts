@@ -95,6 +95,11 @@ export function formatReport(loaded: Loaded, knocked: ReadonlySet<string> = new 
   const reviews = reviewSummaries(arg);
   const count = (state: string): number => [...reviews.values()].filter((r) => r.state === state).length;
   out.push(`Resolution: ${res.sharp} of ${res.bets} bets are specific enough to check.`);
+  const withEvidence = [...arg.claims.values()].filter((c) => c.evidence.length > 0);
+  const unbacked = loaded.issues.filter((i) => i.code === 'trust-unbacked').length;
+  out.push(
+    `Evidence: ${withEvidence.reduce((n, c) => n + c.evidence.length, 0)} records on ${withEvidence.length} claims. ${unbacked} trust label${unbacked === 1 ? ' is' : 's are'} not backed by the evidence attached.`,
+  );
   out.push(
     `Reviews: ${count('confirmed')} confirmed, ${count('rejected')} rejected, ${count('split')} split, ${count('unreviewed')} unreviewed.`,
     '',
@@ -174,6 +179,7 @@ export function toJson(loaded: Loaded, knocked: ReadonlySet<string> = new Set())
       because: c.because,
       bet: c.bet,
       origin: c.origin === '' ? 'argument' : c.origin,
+      evidence: c.evidence,
       review: reviews.get(c.id)?.state,
       reviews: c.reviews,
       reason: reason(arg, a.statuses, knocked, c.id),

@@ -361,6 +361,25 @@ button { font: inherit; color: inherit; }
 .origin { font-size: 0.8rem; color: var(--muted); }
 .origin code { font-family: var(--font-mono); overflow-wrap: anywhere; }
 
+/* Evidence and notepad */
+.earlier summary { cursor: pointer; font-size: 0.9rem; color: var(--muted); padding: 4px 0 8px; }
+.detail-evidence, .detail-notes { display: flex; flex-direction: column; gap: 6px; font-size: 0.9rem; }
+.detail-evidence strong, .detail-notes > strong, .pad h3 { font-family: var(--font-display); }
+.evidence { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.evidence-item { display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 3px solid var(--stands); }
+.evidence-item[data-stance='against'] { border-left-color: var(--falls); }
+.evidence-head { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; }
+.evidence-item[data-stance='against'] .evidence-head strong { color: var(--falls); }
+.evidence-item[data-stance='for'] .evidence-head strong { color: var(--stands); }
+.evidence-facts { color: var(--muted); font-variant-numeric: tabular-nums; }
+.evidence-source { font: 400 0.76rem/1.35 var(--font-mono); color: var(--accent); overflow-wrap: anywhere; }
+.notes { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 0.92rem; }
+.note-item .review-by { font-size: 0.8rem; }
+.pad { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.pad h3 { margin: 0; font-size: 1rem; }
+.pad-related { border-left: 4px solid var(--accent); }
+a { color: var(--accent); }
+
 @media (prefers-reduced-motion: no-preference) {
   .node, .chip, .btn { transition: box-shadow 0.12s, border-color 0.12s; }
 }

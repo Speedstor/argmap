@@ -3,9 +3,26 @@ import type { Analysis, Argument, Claim, Issue, Loaded, Resolution, ReviewState,
 import { layout } from './layout.ts';
 import type { Box } from './layout.ts';
 
+interface Note {
+  text: string;
+  related: boolean;
+  by?: string;
+  date?: string;
+}
+
+/** Notes from the argument's notepads, embedded when the page was built. */
+interface Notes {
+  notepads: { path: string }[];
+  byClaim: Record<string, Note[]>;
+  general: Note[];
+  related: Note[];
+  url?: string;
+}
+
 declare global {
   interface Window {
     __ARGMAP_SOURCE__?: string;
+    __ARGMAP_IDEAS__?: Notes | null;
   }
 }
 
@@ -395,6 +412,33 @@ function renderDetail(arg: Argument, a: Analysis, x: Extra): HTMLElement {
   }
   if (claim.note) card.append(h('p', { class: 'bet-note' }, claim.note));
 
+  if (claim.evidence.length > 0) {
+    const list = h('ul', { class: 'evidence' });
+    for (const e of claim.evidence) {
+      const figure = e.value !== undefined ? `${e.value}${e.unit ? ` ${e.unit}` : ''}` : '';
+      const context = [e.sample, e.period].filter(Boolean).join(', ');
+      const facts = [
+        figure && `${figure}${context ? ` (${context})` : ''}`,
+        e.witness && `${e.firstHand ? 'First-hand: ' : 'Reported by '}${e.witness}`,
+        e.peerReviewed === true && 'peer reviewed',
+        e.peerReviewed === false && 'not peer reviewed',
+      ].filter((f): f is string => typeof f === 'string' && f !== '');
+      const isUrl = e.source !== undefined && /^https?:\/\//.test(e.source);
+      list.append(
+        h(
+          'li',
+          { class: 'evidence-item', 'data-stance': e.stance },
+          h('span', { class: 'evidence-head' }, h('span', { class: 'tag' }, e.kind), h('strong', {}, e.stance === 'for' ? 'for' : 'against')),
+          h('span', { class: 'evidence-says' }, e.says),
+          facts.length > 0 ? h('span', { class: 'evidence-facts' }, facts.join(' · ')) : null,
+          e.source ? (isUrl ? h('a', { class: 'evidence-source', href: e.source, rel: 'noopener' }, e.source) : h('span', { class: 'evidence-source' }, e.source)) : null,
+          e.by ? h('span', { class: 'review-by' }, `added by ${e.by}${e.date ? `, ${e.date}` : ''}`) : null,
+        ),
+      );
+    }
+    card.append(h('div', { class: 'detail-evidence' }, h('strong', {}, `Evidence (${claim.evidence.length})`), list));
+  }
+
   const flags = x.res.flags.get(claim.id) ?? [];
   if (flags.length > 0) {
     const list = h('ul', { class: 'sharpen' });
@@ -423,6 +467,9 @@ function renderDetail(arg: Argument, a: Analysis, x: Extra): HTMLElement {
     card.append(box);
   }
   if (claim.origin !== '') card.append(h('p', { class: 'origin' }, 'From the shared library: ', h('code', {}, claim.origin)));
+
+  const notes = window.__ARGMAP_IDEAS__?.byClaim[claim.id] ?? [];
+  if (notes.length > 0) card.append(h('div', { class: 'detail-notes' }, h('strong', {}, `Notes on this claim (${notes.length})`), noteList(notes)));
 
   if (claim.because.length > 0) {
     const rests = h('div', { class: 'detail-links' }, h('span', { class: 'links-label' }, 'Rests on'));
@@ -640,13 +687,65 @@ function renderRounds(arg: Argument): HTMLElement | null {
       ),
     );
   });
-  return h(
+  // Newest work matters most on a small screen: show the last few, fold the rest away.
+  const RECENT = 6;
+  const items = [...list.children];
+  const section = h(
     'section',
     { class: 'block' },
     h('h2', {}, 'Rounds so far'),
-    h('p', { class: 'lede' }, 'Each change to the argument, with the verdict and resolution it left behind.'),
-    list,
+    h('p', { class: 'lede' }, `${items.length} changes to the argument, each with the verdict and resolution it left behind. Newest last.`),
   );
+  if (items.length > RECENT) {
+    const earlier = h('ol', { class: 'rounds' });
+    earlier.append(...items.slice(0, items.length - RECENT));
+    section.append(h('details', { class: 'earlier' }, h('summary', {}, `Show the ${items.length - RECENT} earlier rounds`), earlier));
+  }
+  section.append(list);
+  return section;
+}
+
+/* ---------- Notepad ---------- */
+
+function noteList(notes: Note[]): HTMLElement {
+  const list = h('ul', { class: 'notes' });
+  for (const note of notes) {
+    list.append(
+      h(
+        'li',
+        { class: 'note-item' },
+        note.text,
+        note.by ? h('span', { class: 'review-by' }, ` ${note.by}${note.date ? `, ${note.date}` : ''}`) : null,
+      ),
+    );
+  }
+  return list;
+}
+
+function renderNotepad(): HTMLElement {
+  const ideas = window.__ARGMAP_IDEAS__;
+  const section = h('section', { class: 'block' }, h('h2', {}, 'Notepad'));
+  if (!ideas || ideas.notepads.length === 0) {
+    section.append(h('p', { class: 'lede' }, 'No notepad yet. A notepad is a page for loose thinking about an argument or a claim, and is only created on request.'));
+    return section;
+  }
+  section.append(
+    h('p', { class: 'lede' }, 'Loose thinking. Nothing here affects the verdict. Notes that mention a claim also appear on that claim.'),
+  );
+  const tied = Object.values(ideas.byClaim).reduce((n, list) => n + list.filter((i) => !i.related).length, 0);
+  if (ideas.general.length > 0) section.append(h('div', { class: 'pad' }, h('h3', {}, 'Notes'), noteList(ideas.general)));
+  if (tied > 0) section.append(h('p', { class: 'note' }, `${tied} more note${tied > 1 ? 's are' : ' is'} tied to particular claims. Tap a claim on the map to read them.`));
+  section.append(
+    h(
+      'div',
+      { class: 'pad pad-related' },
+      h('h3', {}, 'Related ideas'),
+      ideas.related.length > 0 ? noteList(ideas.related) : h('p', { class: 'bet-text' }, 'None yet.'),
+      h('p', { class: 'bet-text' }, 'Any of these can be promoted into a claim, where it is held to the usual standard.'),
+    ),
+  );
+  if (ideas.url) section.append(h('p', { class: 'note' }, h('a', { href: ideas.url, rel: 'noopener' }, 'Open the notepad on GitHub to add to it')));
+  return section;
 }
 
 /* ---------- Outline ---------- */
@@ -812,6 +911,7 @@ function render(): void {
     renderBets(arg, a, x),
     renderOutline(arg, a),
     renderRounds(arg),
+    renderNotepad(),
     renderIssues(
       loaded.issues.filter((i) => i.severity === 'warning'),
       'Checks',

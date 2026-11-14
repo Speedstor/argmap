@@ -1,0 +1,25 @@
+# Trusted keys for this repository. One line per person or AI:
+#
+#   name@person  key-type  public-key
+#   name@ai      key-type  public-key
+#
+# These are PUBLIC keys. They let anyone check a signature and let nobody make
+# one, so this file is safe to publish. What must be protected is who can edit
+# it: whoever can add a line here can grant access. Keep it on main.
+#
+# "argmap verify" reads this file from main and checks that every commit is
+# signed by a key listed here, and that each review, piece of evidence and log
+# entry a commit adds is in the signer's own name.
+#
+# To add yourself (once), with an SSH key you already use for GitHub:
+#   git config gpg.format ssh
+#   git config user.signingkey ~/.ssh/id_ed25519.pub
+#   git config commit.gpgsign true
+# then add a line here with the contents of that .pub file after your name.
+# Only ssh-ed25519 keys are checked for now.
+#
+# Nobody is listed yet. The line below is the key that signed the commits made
+# in the Claude session that built this tool. Remove the "# " to trust it. It
+# may not be the key a later session signs with.
+#
+# claude-fable-5.2@ai ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKy87HxSEheG8vEPhSs9u2KZCtVErAQfpmprtUJCZ2w7

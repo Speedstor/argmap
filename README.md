@@ -75,6 +75,75 @@ whether the support really establishes it.
   **split** and goes to the top of `next` as needing adjudication. There is no
   adjudication rule yet; that is the next thing to design.
 
+## Evidence
+
+Any claim can carry evidence records, each with one sentence on what it shows
+and a source someone else can open:
+
+| kind | What it is |
+| --- | --- |
+| `statistic` | A measured figure, with its unit, sample and period |
+| `account` | What someone saw or did, ideally first-hand |
+| `paper` | A published study |
+| `reference` | Any other secondary source: an encyclopedia, a report, a textbook |
+
+Evidence can count **for** or **against** a claim. Records that rest on the
+same underlying work share an `origin`, so they count as one source.
+
+The trust label is **not** computed from the evidence. A rule that sets the
+label can be gamed by whoever wants a claim to look verified, so the label
+stays a typed judgment that reviewers can challenge. The tool only points out
+the gap: `corroborated` with fewer than two independent sources attached,
+`observed` with no first-hand account, `track-record` with nothing attached,
+or a trusted bet with evidence against it.
+
+## Notepads
+
+A notepad is a page of loose thinking about an argument or a single claim. It
+is plain Markdown, nothing on it affects a verdict, and nothing on it has to be
+checked. Mention a claim as `[[claim-id]]` to tie a note to it. Each page ends
+with **Related ideas**: thoughts that could become new claims.
+
+Notepads live on the `ideas` branch, which is never merged into `main`. The
+tools read that branch directly and write to it without checking it out, so
+you can stay on your working branch:
+
+```sh
+npm run argmap -- notepad arguments/second-industrialization.yaml --by you
+npm run argmap -- idea arguments/second-industrialization.yaml "what about peat? [[easy-coal-mined-out]]" --by you
+npm run argmap -- ideas arguments/second-industrialization.yaml
+git push origin ideas
+```
+
+Notepads are created on request (`--claim <id>` for one claim), so most
+arguments and claims have none. A pull request into `ideas` is approved and
+merged automatically when it comes from someone with access to the repository
+and changes only notepad files; the workflow is on the `ideas` branch.
+
+## Who said it: signed access
+
+`allowed_signers` lists the public keys of the people and AIs trusted to
+contribute, one per line as `name@person` or `name@ai`. Public keys can check
+a signature but cannot make one, so the list is safe to publish. What needs
+protecting is who can edit it, so it is read from `main`.
+
+```sh
+npm run argmap -- verify                  # commits since origin/main
+npm run argmap -- verify HEAD~5..HEAD
+```
+
+`verify` checks that every commit is signed by a listed key, and that each
+review, piece of evidence and log entry a commit adds is in the signer's own
+name and kind. Nobody can record a judgment as someone else, and an AI cannot
+record one as a person. A signature shows which key signed; for an AI that
+means the agent its operator gave the key to, not which model wrote the text.
+Signatures are checked with the public key alone, in the tool itself, so no
+extra software is needed. Only `ssh-ed25519` keys are supported so far.
+
+Notepads are deliberately outside this: editing one on GitHub from a phone
+produces a commit your own key did not sign, and loose notes do not need the
+same guarantee.
+
 ## MCP server
 
 `bin/argmap-mcp.mjs` is a Model Context Protocol server over stdio, so an AI
@@ -101,7 +170,9 @@ client can read, search, sharpen and review arguments. Point a client at it:
 | `create_argument`, `add_claim`, `set_support`, `add_opposition` | Build structure |
 | `refine_claim` | Increase resolution: replace a bet with sharper claims |
 | `reword_claim`, `set_bet` | Sharpen wording; record the result of a check |
+| `add_evidence` | Attach a statistic, account, paper or reference, for or against |
 | `add_review` | Record a confirm or reject from a person or an AI |
+| `read_ideas`, `create_notepad`, `add_idea` | Read and write notepads on the ideas branch |
 
 Every write is checked before it is saved: a change that would leave the
 argument unloadable is refused and nothing is written. Comments and layout in
@@ -126,6 +197,8 @@ These follow from the bets as written. None of them means "true".
 | `claims/` | The shared claims library |
 | `src/` | The engine: parsing, checks, evaluation, analysis, lint, reviews. Deterministic, no AI |
 | `src/edit.ts`, `src/mcp.ts` | Safe edits to the files, and the MCP server built on them |
+| `src/ideas.ts`, `src/verify.ts` | Notepads on the ideas branch; signature checks |
+| `allowed_signers` | The public list of trusted keys |
 | `viewer/` | The interactive page, bundled by `scripts/build.mjs` |
 | `test/` | Engine and MCP server tests |
 

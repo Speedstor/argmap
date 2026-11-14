@@ -175,10 +175,13 @@ test('the civilization argument loads and hinges on three disputes', () => {
   const library = [{ name: 'claims/energy-and-industry.yaml', source: read('claims/energy-and-industry.yaml') }];
   const loaded = load(read('arguments/second-industrialization.yaml'), library);
   assert.ok(loaded.ok, JSON.stringify(loaded.issues, null, 2));
+  const codes = loaded.issues.map((i) => i.code);
   assert.deepEqual(
-    loaded.issues.map((i) => i.code),
+    codes.filter((c) => c !== 'trust-unbacked'),
     ['sense-clash'],
   );
+  // The fixture labels bets without attaching the evidence, and says so.
+  assert.equal(codes.filter((c) => c === 'trust-unbacked').length, 8);
   const a = analyze(loaded.argument as Argument);
   assert.equal(a.conclusion, 'contested');
   assert.equal(a.cruxes.cruxes.length, 3);

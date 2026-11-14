@@ -1,4 +1,5 @@
 import type { Analysis } from './analyze.ts';
+import { evidenceIssues } from './evidence.ts';
 import { resolution } from './lint.ts';
 import { reviewSummaries } from './review.ts';
 import type { Argument } from './types.ts';
@@ -25,6 +26,11 @@ const ORDER: StepKind[] = ['adjudicate', 'answer', 'refine', 'check', 'settle', 
 export function nextSteps(arg: Argument, analysis: Analysis): Step[] {
   const reviews = reviewSummaries(arg);
   const { flags } = resolution(arg);
+  const unbacked = new Map<string, string>();
+  for (const issue of evidenceIssues(arg)) {
+    const id = issue.claims[0];
+    if (id && (issue.code === 'trust-unbacked' || issue.code === 'evidence-against') && !unbacked.has(id)) unbacked.set(id, issue.message);
+  }
   const steps: (Step & { rank: number })[] = [];
   const label = (id: string): string => arg.claims.get(id)?.label ?? id;
   const push = (step: Step, rank: number): void => {
@@ -51,6 +57,8 @@ export function nextSteps(arg: Argument, analysis: Analysis): Step[] {
       push({ ...base, kind: 'answer', why: `"${label(bet.id)}" was rejected by ${who}. Revise it, replace it, or knock it out.` }, rank);
     } else if (found.length > 0) {
       push({ ...base, kind: 'refine', why: `"${label(bet.id)}" is hand-wavy. ${found.map((f) => f.message).join(' ')}` }, rank);
+    } else if (unbacked.has(bet.id)) {
+      push({ ...base, kind: 'check', why: unbacked.get(bet.id) as string }, rank);
     } else if (bet.trust === 'assumed' || bet.trust === 'track-record') {
       push(
         {

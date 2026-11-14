@@ -16,10 +16,10 @@ const scriptString = (s) =>
     .replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
 
 /**
- * @param {{ source?: string, title?: string }} [options] The argument file's text to embed, and the page title.
+ * @param {{ source?: string, title?: string, ideas?: object | null }} [options] The argument file's text to embed, the page title, and its notepad notes.
  * @returns {Promise<string>} A complete HTML document.
  */
-export async function buildViewer({ source = '', title = 'argmap' } = {}) {
+export async function buildViewer({ source = '', title = 'argmap', ideas = null } = {}) {
   const result = await build({
     entryPoints: [resolve(root, 'viewer/main.ts')],
     bundle: true,
@@ -45,7 +45,7 @@ ${css}</style>
 </head>
 <body>
 <main id="app"></main>
-<script>window.__ARGMAP_SOURCE__ = ${scriptString(source)};</script>
+<script>window.__ARGMAP_SOURCE__ = ${scriptString(source)}; window.__ARGMAP_IDEAS__ = JSON.parse(${scriptString(JSON.stringify(ideas))});</script>
 <script>${script}</script>
 </body>
 </html>

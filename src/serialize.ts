@@ -1,6 +1,18 @@
 import { Document, isScalar, isSeq, visit } from 'yaml';
 import { prettyLabel } from './parse.ts';
-import type { Argument } from './types.ts';
+import type { Argument, Evidence } from './types.ts';
+
+/** Evidence as it is written in a file: snake_case keys, defaults left out. */
+export function evidenceToYaml(e: Evidence): Record<string, unknown> {
+  const out: Record<string, unknown> = { kind: e.kind };
+  if (e.stance === 'against') out['stance'] = 'against';
+  out['says'] = e.says;
+  for (const key of ['value', 'unit', 'sample', 'period', 'witness'] as const) if (e[key] !== undefined) out[key] = e[key];
+  if (e.firstHand !== undefined) out['first_hand'] = e.firstHand;
+  if (e.peerReviewed !== undefined) out['peer_reviewed'] = e.peerReviewed;
+  for (const key of ['source', 'origin', 'by', 'date'] as const) if (e[key] !== undefined) out[key] = e[key];
+  return out;
+}
 
 /**
  * Write an assembled argument as one self-contained file: the argument's own
@@ -24,6 +36,7 @@ export function toYaml(arg: Argument): string {
       out['bet'] = bet;
     }
     if (claim.note) out['note'] = claim.note;
+    if (claim.evidence.length > 0) out['evidence'] = claim.evidence.map(evidenceToYaml);
     if (claim.reviews.length > 0) out['reviews'] = claim.reviews;
     claims[claim.id] = out;
   }

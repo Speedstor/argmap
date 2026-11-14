@@ -36,6 +36,8 @@ export interface Claim {
   note?: string;
   /** Peer reviews of this claim, oldest first. */
   reviews: Review[];
+  /** What has been found for or against this claim. */
+  evidence: Evidence[];
   /** The file this claim was defined in: '' for the argument file, otherwise a library file name. */
   origin: string;
 }
@@ -58,6 +60,39 @@ export interface Review {
   date?: string;
   /** Fingerprint of the claim when it was reviewed. A review of an older wording is stale. */
   rev?: string;
+}
+
+export const EVIDENCE_KINDS = ['statistic', 'account', 'paper', 'reference'] as const;
+export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
+export const STANCES = ['for', 'against'] as const;
+export type Stance = (typeof STANCES)[number];
+
+/**
+ * One piece of evidence bearing on a claim.
+ *   statistic: a measured figure, with its unit, sample and period
+ *   account:   what someone saw or did, ideally first-hand
+ *   paper:     a published study
+ *   reference: any other secondary source (an encyclopedia, a report, a textbook)
+ * Evidence can count against a claim as well as for it.
+ */
+export interface Evidence {
+  kind: EvidenceKind;
+  stance: Stance;
+  /** What it shows, in one sentence. */
+  says: string;
+  /** Where to find it: a URL, DOI or citation. */
+  source?: string;
+  /** What it ultimately rests on. Two records with the same origin are not independent. */
+  origin?: string;
+  by?: string;
+  date?: string;
+  value?: number | string;
+  unit?: string;
+  sample?: string;
+  period?: string;
+  witness?: string;
+  firstHand?: boolean;
+  peerReviewed?: boolean;
 }
 
 /** One round of work on an argument, with the verdict it left behind. */

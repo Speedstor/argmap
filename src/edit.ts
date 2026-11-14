@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isMap, isScalar, isSeq, parseDocument } from 'yaml';
 import type { Document } from 'yaml';
-import { analyze, claimRev, load, resolution, REVIEWER_KINDS, TRUST_LEVELS, VERDICTS } from './index.ts';
-import type { Cost, Issue, Loaded, ReviewerKind, Status, Trust, Verdict } from './index.ts';
+import { analyze, claimRev, EVIDENCE_KINDS, evidenceToYaml, load, resolution, REVIEWER_KINDS, STANCES, TRUST_LEVELS, VERDICTS } from './index.ts';
+import type { Cost, Evidence, Issue, Loaded, ReviewerKind, Status, Trust, Verdict } from './index.ts';
 import { findRoot, LIBRARY_DIR, libraryFiles } from './workspace.ts';
 
 const WRITE_OPTIONS = { lineWidth: 0, flowCollectionPadding: false } as const;
@@ -212,6 +212,19 @@ export class Editor {
     if (typeof cost === 'string' && cost !== 'medium') value['cost'] = cost;
     if (typeof note === 'string' && note.trim() !== '') value['note'] = note.trim();
     doc.setIn(['claims', id, 'bet'], doc.createNode(value));
+    return this;
+  }
+
+  /** Attach a piece of evidence to a claim. It does not change the claim's trust label; that stays a judgment. */
+  addEvidence(id: string, evidence: Evidence): this {
+    if (!(EVIDENCE_KINDS as readonly string[]).includes(evidence.kind)) throw new EditError(`kind must be one of ${EVIDENCE_KINDS.join(', ')}.`);
+    if (!(STANCES as readonly string[]).includes(evidence.stance)) throw new EditError(`stance must be ${STANCES.join(' or ')}.`);
+    if (evidence.says.trim() === '') throw new EditError('Evidence needs "says": one sentence on what it shows.');
+    const path = this.mustLocate(id);
+    const doc = this.openClaim(path, id);
+    const node = doc.createNode(evidenceToYaml({ date: today(), ...evidence }));
+    if (isSeq(doc.getIn(['claims', id, 'evidence'], true))) doc.addIn(['claims', id, 'evidence'], node);
+    else doc.setIn(['claims', id, 'evidence'], doc.createNode([evidenceToYaml({ date: today(), ...evidence })]));
     return this;
   }
 
