@@ -19,7 +19,7 @@ export interface Layout {
   gapX: number;
 }
 
-const NODE_H = 56;
+const NODE_H = 68;
 const GAP_Y = 16;
 const MIN_W = 96;
 const MAX_W = 200;

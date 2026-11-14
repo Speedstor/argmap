@@ -1,11 +1,15 @@
 {
   "name": "argmap",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A build system for beliefs: map an argument, see what it rests on, and see what falls when a bet fails.",
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=22.18" },
-  "bin": { "argmap": "bin/argmap.mjs" },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "argmap": "bin/argmap.mjs"
+  },
   "scripts": {
     "argmap": "node bin/argmap.mjs",
     "test": "node --test test/*.test.ts",
@@ -13,7 +17,9 @@
     "build": "node scripts/build.mjs"
   },
   "dependencies": {
-    "yaml": "^2.8.0"
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "yaml": "^2.8.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

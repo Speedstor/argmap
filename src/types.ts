@@ -34,6 +34,42 @@ export interface Claim {
   because: string[][];
   bet?: Bet;
   note?: string;
+  /** Peer reviews of this claim, oldest first. */
+  reviews: Review[];
+  /** The file this claim was defined in: '' for the argument file, otherwise a library file name. */
+  origin: string;
+}
+
+export const VERDICTS = ['confirm', 'reject'] as const;
+export type Verdict = (typeof VERDICTS)[number];
+export const REVIEWER_KINDS = ['person', 'ai'] as const;
+export type ReviewerKind = (typeof REVIEWER_KINDS)[number];
+
+/**
+ * One reviewer's judgment of one claim. For a bet: is it acceptable as stated?
+ * For a supported claim: does the support really establish it?
+ * People and AI reviewers carry the same weight.
+ */
+export interface Review {
+  by: string;
+  kind: ReviewerKind;
+  verdict: Verdict;
+  note?: string;
+  date?: string;
+  /** Fingerprint of the claim when it was reviewed. A review of an older wording is stale. */
+  rev?: string;
+}
+
+/** One round of work on an argument, with the verdict it left behind. */
+export interface LogEntry {
+  at: string;
+  by: string;
+  did: string;
+  claim?: string;
+  note?: string;
+  verdict?: Status;
+  bets?: number;
+  sharp?: number;
 }
 
 /** A pinned definition. The key is `word` or `word#sense`. */
@@ -59,6 +95,8 @@ export interface Argument {
   attacks: Attack[];
   /** Open disagreements: each side attacks the other. */
   disputes: [string, string][];
+  /** Rounds of work, oldest first. */
+  log: LogEntry[];
 }
 
 export interface Issue {

@@ -103,6 +103,62 @@ extended with support. The result does not depend on the order of the file.
 the engine reports the conclusion under each outcome, and for up to ten disputes
 it counts how the conclusion comes out across every way of settling them.
 
+## The claims library
+
+Files under `claims/` use the same sections (`terms`, `claims`, `attacks`,
+`disputes`) but have no `title` or `conclusion`. An argument file can rest on a
+library claim just by naming its id. When an argument is loaded:
+
+- every claim in the argument file is kept;
+- a library claim is included when an included claim rests on it, or when the
+  library records it as attacking or disputing an included claim;
+- a library term is included when an included claim pins it;
+- an id defined in two files is an error.
+
+`argmap bundle <file>` prints the argument with everything it drew from the
+library inlined, as one self-contained file.
+
+## Reviews
+
+```yaml
+claims:
+  some-claim:
+    text: ...
+    reviews:
+      - by: aldrin          # a person's name or a model name
+        kind: person        # person | ai; both count the same
+        verdict: reject     # confirm | reject
+        note: The 1840s is too early.
+        date: 2026-11-14
+        rev: 3fa9c21e       # fingerprint of the wording that was judged
+```
+
+`rev` is written by the tools. It is a fingerprint of the claim's text and
+support, so a review of an older wording is recognised as stale and stops
+counting. A review written by hand without `rev` is treated as current. Each
+reviewer's newest review replaces their earlier one.
+
+A claim's review state is `unreviewed`, `confirmed` (no current rejection),
+`rejected` (no current confirmation) or `split` (both). Review state never
+changes whether a claim stands; a split claim waits for adjudication.
+
+## The log
+
+```yaml
+log:
+  - at: 2026-11-13
+    by: claude-fable-5.2
+    did: refine             # create, add, refine, rewire, reword, check, review, attack, dispute
+    claim: easy-coal-mined-out
+    note: Why the change was made.
+    verdict: contested      # the conclusion after this round
+    bets: 17                # how many bets the argument rests on
+    sharp: 4                # how many of them are specific enough to check
+```
+
+The tools append one entry per change, so the file records how the verdict and
+the resolution moved over time.
+
 ## Other checks
 
 - **circular-support**: claims that rest on each other with no bet underneath.

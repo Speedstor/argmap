@@ -322,6 +322,45 @@ button { font: inherit; color: inherit; }
 .loader input[type='file'] { font-size: 0.85rem; color: var(--muted); max-width: 100%; }
 .foot { color: var(--muted); font-size: 0.85rem; max-width: 65ch; }
 
+/* Stats, steps, reviews, rounds */
+.stats { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 16px; }
+.stats dt { font: 500 0.7rem/1 var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 4px; }
+.stats dd { margin: 0; font-size: 0.92rem; font-variant-numeric: tabular-nums; }
+
+.steps, .rounds { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+.step, .round { padding: 11px 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.step:first-child, .round:first-child { border-top: 0; }
+.step-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.step-kind { font: 600 0.72rem/1 var(--font-mono); text-transform: uppercase; letter-spacing: 0.05em; color: var(--paper); background: var(--accent); border-radius: 3px; padding: 3px 6px; }
+.step-kind[data-kind='adjudicate'], .step-kind[data-kind='answer'] { background: var(--falls); }
+.step-kind[data-kind='review'] { background: var(--muted); }
+.step-claims { display: inline-flex; flex-wrap: wrap; gap: 0 6px; align-items: baseline; font-size: 0.85rem; color: var(--muted); }
+
+.round { flex-direction: row; gap: 12px; }
+.round-n { font: 500 0.8rem/1.5 var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2ch; text-align: right; }
+.round-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.round-what { font-size: 0.95rem; }
+.round-what strong { font-family: var(--font-display); text-transform: capitalize; }
+
+.tag-soft { color: var(--contested); border-color: var(--contested); }
+.review-tag[data-review='confirmed'] { color: var(--stands); border-color: var(--stands); }
+.review-tag[data-review='rejected'] { color: var(--falls); border-color: var(--falls); }
+.review-tag[data-review='split'] { color: var(--paper); background: var(--falls); border-color: var(--falls); }
+.detail-sharpen { padding: 10px 12px; border: 1px dashed var(--contested); border-radius: 5px; font-size: 0.9rem; display: flex; flex-direction: column; gap: 4px; }
+.detail-sharpen strong { color: var(--contested); font-family: var(--font-display); }
+.sharpen { margin: 0; padding-left: 18px; color: var(--muted); }
+.detail-reviews { display: flex; flex-direction: column; gap: 6px; }
+.reviews-head { font-size: 0.8rem; }
+.reviews { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.review { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 0.88rem; padding-left: 10px; border-left: 3px solid var(--stands); }
+.review[data-verdict='reject'] { border-left-color: var(--falls); }
+.review-verdict { font-weight: 600; }
+.review-by { color: var(--muted); }
+.review-note { flex-basis: 100%; }
+.review-stale { opacity: 0.55; border-left-style: dashed; }
+.origin { font-size: 0.8rem; color: var(--muted); }
+.origin code { font-family: var(--font-mono); overflow-wrap: anywhere; }
+
 @media (prefers-reduced-motion: no-preference) {
   .node, .chip, .btn { transition: box-shadow 0.12s, border-color 0.12s; }
 }

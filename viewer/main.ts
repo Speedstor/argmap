@@ -1,5 +1,5 @@
-import { analyze, attackersOf, load, plainText, reason, segments, TRUST_LEVELS } from '../src/index.ts';
-import type { Analysis, Argument, Claim, Issue, Loaded, Status, Trust } from '../src/index.ts';
+import { analyze, attackersOf, load, nextSteps, plainText, reason, resolution, reviewSummaries, segments, TRUST_LEVELS } from '../src/index.ts';
+import type { Analysis, Argument, Claim, Issue, Loaded, Resolution, ReviewState, ReviewSummary, Status, StepKind, Trust } from '../src/index.ts';
 import { layout } from './layout.ts';
 import type { Box } from './layout.ts';
 
@@ -80,6 +80,23 @@ function pill(status: Status, big = false): HTMLElement {
   );
 }
 
+const REVIEW_WORD: Record<ReviewState, string> = {
+  unreviewed: 'Not reviewed',
+  confirmed: 'Confirmed by review',
+  rejected: 'Rejected by review',
+  split: 'Reviewers disagree',
+};
+
+function reviewTag(state: ReviewState): HTMLElement {
+  return h('span', { class: 'tag review-tag', 'data-review': state }, REVIEW_WORD[state]);
+}
+
+/** Per-render facts that several sections share. */
+interface Extra {
+  res: Resolution;
+  reviews: Map<string, ReviewSummary>;
+}
+
 function pips(trust: Trust): HTMLElement {
   const filled = TRUST_LEVELS.length - TRUST_LEVELS.indexOf(trust);
   const el = h('span', { class: 'pips', 'data-trust': trust, role: 'img', 'aria-label': `Trust: ${TRUST_WORD[trust]}` });
@@ -124,7 +141,7 @@ function verdictLine(arg: Argument, a: Analysis): string {
   return reason(arg, a.statuses, state.knocked, arg.conclusion);
 }
 
-function renderVerdict(arg: Argument, a: Analysis): HTMLElement {
+function renderVerdict(arg: Argument, a: Analysis, x: Extra): HTMLElement {
   const conclusion = arg.claims.get(arg.conclusion) as Claim;
   return h(
     'header',
@@ -137,6 +154,18 @@ function renderVerdict(arg: Argument, a: Analysis): HTMLElement {
       h('div', { class: 'verdict-top' }, pill(a.conclusion, true), h('span', { class: 'verdict-label' }, 'the conclusion')),
       h('p', { class: 'verdict-claim' }, claimText(arg, conclusion)),
       h('p', { class: 'verdict-why' }, verdictLine(arg, a)),
+    ),
+    h(
+      'dl',
+      { class: 'stats' },
+      h('div', {}, h('dt', {}, 'Resolution'), h('dd', {}, `${x.res.sharp} of ${x.res.bets} bets specific enough to check`)),
+      h(
+        'div',
+        {},
+        h('dt', {}, 'Review'),
+        h('dd', {}, `${[...x.reviews.values()].filter((r) => r.state !== 'unreviewed').length} of ${arg.claims.size} claims reviewed`),
+      ),
+      h('div', {}, h('dt', {}, 'Rounds'), h('dd', {}, String(arg.log.length))),
     ),
   );
 }
@@ -322,7 +351,7 @@ function renderLegend(): HTMLElement {
 
 /* ---------- Detail ---------- */
 
-function renderDetail(arg: Argument, a: Analysis): HTMLElement {
+function renderDetail(arg: Argument, a: Analysis, x: Extra): HTMLElement {
   const claim = arg.claims.get(state.selected) ?? (arg.claims.get(arg.conclusion) as Claim);
   const st = a.statuses.get(claim.id) ?? 'contested';
   const side = a.sides.get(claim.id);
@@ -365,6 +394,35 @@ function renderDetail(arg: Argument, a: Analysis): HTMLElement {
     );
   }
   if (claim.note) card.append(h('p', { class: 'bet-note' }, claim.note));
+
+  const flags = x.res.flags.get(claim.id) ?? [];
+  if (flags.length > 0) {
+    const list = h('ul', { class: 'sharpen' });
+    for (const flag of flags) list.append(h('li', {}, flag.message));
+    card.append(h('div', { class: 'detail-sharpen' }, h('strong', {}, 'Could be sharper'), list));
+  }
+
+  const review = x.reviews.get(claim.id);
+  if (review) {
+    const box = h('div', { class: 'detail-reviews' }, h('div', { class: 'reviews-head' }, reviewTag(review.state)));
+    const line = (r: ReviewSummary['current'][number], stale: boolean): HTMLElement =>
+      h(
+        'li',
+        { class: `review${stale ? ' review-stale' : ''}`, 'data-verdict': r.verdict },
+        h('span', { class: 'review-verdict' }, r.verdict === 'confirm' ? '✓ confirms' : '✕ rejects'),
+        h('span', { class: 'review-by' }, `${r.by} (${r.kind === 'ai' ? 'AI' : 'person'})${r.date ? `, ${r.date}` : ''}${stale ? ', of an earlier wording' : ''}`),
+        r.note ? h('span', { class: 'review-note' }, r.note) : null,
+      );
+    if (review.current.length + review.stale.length > 0) {
+      const list = h('ul', { class: 'reviews' });
+      for (const r of review.current) list.append(line(r, false));
+      for (const r of review.stale) list.append(line(r, true));
+      box.append(list);
+    }
+    if (review.state === 'split') box.append(h('p', { class: 'bet-note' }, 'Every reviewer counts the same, so this waits for adjudication.'));
+    card.append(box);
+  }
+  if (claim.origin !== '') card.append(h('p', { class: 'origin' }, 'From the shared library: ', h('code', {}, claim.origin)));
 
   if (claim.because.length > 0) {
     const rests = h('div', { class: 'detail-links' }, h('span', { class: 'links-label' }, 'Rests on'));
@@ -458,7 +516,7 @@ function renderDisputes(arg: Argument, a: Analysis): HTMLElement | null {
 
 /* ---------- Bets ---------- */
 
-function renderBets(arg: Argument, a: Analysis): HTMLElement {
+function renderBets(arg: Argument, a: Analysis, x: Extra): HTMLElement {
   const section = h(
     'section',
     { class: 'block' },
@@ -487,6 +545,8 @@ function renderBets(arg: Argument, a: Analysis): HTMLElement {
             { class: 'bet-meta' },
             h('span', { class: 'tag', 'data-trust': b.trust }, b.trust),
             h('span', { class: 'tag' }, b.side === 'against' ? 'objection' : b.side === 'for' ? 'support' : b.side),
+            x.res.flags.has(b.id) ? h('span', { class: 'tag tag-soft' }, 'hand-wavy') : null,
+            x.reviews.get(b.id)?.state !== 'unreviewed' ? reviewTag(x.reviews.get(b.id)?.state ?? 'unreviewed') : null,
             knocked
               ? h('span', { class: 'effect' }, 'knocked out')
               : b.decisive
@@ -500,6 +560,93 @@ function renderBets(arg: Argument, a: Analysis): HTMLElement {
   }
   section.append(list);
   return section;
+}
+
+/* ---------- Next steps and rounds ---------- */
+
+const STEP_WORD: Record<StepKind, string> = {
+  adjudicate: 'Adjudicate',
+  answer: 'Answer',
+  refine: 'Sharpen',
+  check: 'Check',
+  settle: 'Settle',
+  review: 'Review',
+};
+
+function renderSteps(arg: Argument, a: Analysis): HTMLElement {
+  const steps = nextSteps(arg, a);
+  const section = h(
+    'section',
+    { class: 'block' },
+    h('h2', {}, 'What to do next'),
+    h(
+      'p',
+      { class: 'lede' },
+      steps.length === 0
+        ? 'Nothing outstanding.'
+        : `${steps.length} steps outstanding. The first few, most valuable first. Each round of work is recorded below.`,
+    ),
+  );
+  if (steps.length === 0) return section;
+  const list = h('ol', { class: 'steps' });
+  for (const step of steps.slice(0, 6)) {
+    const names = h('span', { class: 'step-claims' });
+    step.claims.forEach((id, i) => {
+      if (i > 0) names.append(' vs ');
+      names.append(h('button', { class: 'linkish', type: 'button', click: () => select(id) }, arg.claims.get(id)?.label ?? id));
+    });
+    list.append(
+      h(
+        'li',
+        { class: 'step' },
+        h(
+          'div',
+          { class: 'step-head' },
+          h('span', { class: 'step-kind', 'data-kind': step.kind }, STEP_WORD[step.kind]),
+          names,
+          step.decisive ? h('span', { class: 'effect effect-hot' }, 'can change the conclusion') : null,
+        ),
+        h('p', { class: 'bet-text' }, step.why),
+      ),
+    );
+  }
+  section.append(list);
+  return section;
+}
+
+function renderRounds(arg: Argument): HTMLElement | null {
+  if (arg.log.length === 0) return null;
+  const list = h('ol', { class: 'rounds' });
+  arg.log.forEach((entry, i) => {
+    const subject = entry.claim ? (arg.claims.get(entry.claim)?.label ?? entry.claim) : '';
+    list.append(
+      h(
+        'li',
+        { class: 'round' },
+        h('span', { class: 'round-n' }, String(i + 1)),
+        h(
+          'div',
+          { class: 'round-main' },
+          h('p', { class: 'round-what' }, h('strong', {}, entry.did), subject ? ` ${subject}` : ''),
+          entry.note ? h('p', { class: 'bet-text' }, entry.note) : null,
+          h(
+            'p',
+            { class: 'bet-meta' },
+            entry.verdict ? pill(entry.verdict) : null,
+            entry.bets !== undefined ? h('span', { class: 'effect' }, `${entry.sharp ?? 0} of ${entry.bets} bets specific`) : null,
+            h('span', { class: 'effect' }, [entry.by, entry.at].filter(Boolean).join(', ')),
+          ),
+        ),
+      ),
+    );
+  });
+  return h(
+    'section',
+    { class: 'block' },
+    h('h2', {}, 'Rounds so far'),
+    h('p', { class: 'lede' }, 'Each change to the argument, with the verdict and resolution it left behind.'),
+    list,
+  );
 }
 
 /* ---------- Outline ---------- */
@@ -644,24 +791,27 @@ function render(): void {
   }
 
   const a = analyze(arg, state.knocked);
+  const x: Extra = { res: resolution(arg), reviews: reviewSummaries(arg) };
   // Content width of the page, less the map's border and inner padding.
   const cs = getComputedStyle(root);
   const available = Math.max(260, root.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 14);
   parts.push(
-    renderVerdict(arg, a),
+    renderVerdict(arg, a, x),
     renderBar(arg, a),
     h(
       'section',
       { class: 'block block-map' },
       h('h2', {}, 'The map'),
-      h('p', { class: 'lede' }, 'Conclusion on the left, bets on the right. Tap a claim to read it, then knock it out to see what falls.'),
+      h('p', { class: 'lede' }, 'Conclusion on the left, bets on the right. Tap a claim to read it, then knock it out to see what falls. A deep map scrolls sideways.'),
       renderGraph(arg, a, available),
       renderLegend(),
-      renderDetail(arg, a),
+      renderDetail(arg, a, x),
     ),
+    renderSteps(arg, a),
     renderDisputes(arg, a),
-    renderBets(arg, a),
+    renderBets(arg, a, x),
     renderOutline(arg, a),
+    renderRounds(arg),
     renderIssues(
       loaded.issues.filter((i) => i.severity === 'warning'),
       'Checks',

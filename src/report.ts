@@ -1,5 +1,9 @@
 import { analyze, knockOut } from './analyze.ts';
 import { reason } from './evaluate.ts';
+import { resolution } from './lint.ts';
+import { nextSteps } from './next.ts';
+import type { Step } from './next.ts';
+import { reviewSummaries } from './review.ts';
 import { plainText } from './terms.ts';
 import type { Loaded } from './index.ts';
 import type { Argument, Issue, Status } from './types.ts';
@@ -87,6 +91,17 @@ export function formatReport(loaded: Loaded, knocked: ReadonlySet<string> = new 
   }
   out.push('');
 
+  const res = resolution(arg);
+  const reviews = reviewSummaries(arg);
+  const count = (state: string): number => [...reviews.values()].filter((r) => r.state === state).length;
+  out.push(`Resolution: ${res.sharp} of ${res.bets} bets are specific enough to check.`);
+  out.push(
+    `Reviews: ${count('confirmed')} confirmed, ${count('rejected')} rejected, ${count('split')} split, ${count('unreviewed')} unreviewed.`,
+    '',
+  );
+
+  out.push(formatSteps(nextSteps(arg, a), 5), '');
+
   out.push('Claims');
   for (const claim of arg.claims.values()) {
     if (claim.bet) continue;
@@ -98,6 +113,25 @@ export function formatReport(loaded: Loaded, knocked: ReadonlySet<string> = new 
   const warnings = loaded.issues.filter((i) => i.severity === 'warning');
   if (warnings.length > 0) out.push(formatIssues(warnings), '');
   out.push('✓ stands   ✗ falls   ? contested.  None of these means "true": they follow from the bets as written.');
+  return out.join('\n');
+}
+
+const STEP_WORD: Record<Step['kind'], string> = {
+  adjudicate: 'ADJUDICATE',
+  answer: 'ANSWER',
+  refine: 'REFINE',
+  check: 'CHECK',
+  settle: 'SETTLE',
+  review: 'REVIEW',
+};
+
+export function formatSteps(steps: Step[], limit: number): string {
+  if (steps.length === 0) return 'Next steps: nothing outstanding.';
+  const out = [`Next steps (${Math.min(limit, steps.length)} of ${steps.length})`];
+  steps.slice(0, limit).forEach((step, i) => {
+    out.push(`  ${i + 1}. ${STEP_WORD[step.kind]} ${step.claims.join(' / ')}${step.decisive ? '  (can change the conclusion)' : ''}`);
+    out.push(wrap(step.why, 88, '       '));
+  });
   return out.join('\n');
 }
 
@@ -126,6 +160,8 @@ export function toJson(loaded: Loaded, knocked: ReadonlySet<string> = new Set())
   const arg = loaded.argument;
   if (!arg || !loaded.ok) return { ok: false, issues: loaded.issues };
   const a = analyze(arg, knocked);
+  const res = resolution(arg);
+  const reviews = reviewSummaries(arg);
   return {
     ok: true,
     title: arg.title,
@@ -137,10 +173,16 @@ export function toJson(loaded: Loaded, knocked: ReadonlySet<string> = new Set())
       side: a.sides.get(c.id),
       because: c.because,
       bet: c.bet,
+      origin: c.origin === '' ? 'argument' : c.origin,
+      review: reviews.get(c.id)?.state,
+      reviews: c.reviews,
       reason: reason(arg, a.statuses, knocked, c.id),
     })),
     bets: a.bets,
     cruxes: a.cruxes,
+    resolution: { bets: res.bets, sharp: res.sharp, flags: Object.fromEntries(res.flags) },
+    nextSteps: nextSteps(arg, a),
+    log: arg.log,
     issues: loaded.issues,
   };
 }

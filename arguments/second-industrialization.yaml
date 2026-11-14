@@ -5,21 +5,11 @@ conclusion: never-again
 # Drafted by Claude as the first test of the format, 13 Nov 2026.
 # Trust labels are deliberately conservative: "corroborated" is used only where
 # a source was actually checked, and the note says which.
+# Claims not defined here come from the library in claims/.
 
 terms:
-  collapse: >
-    A global catastrophe that ends industrial production and long-distance trade
-    and leaves survivors at pre-industrial technology. Ruins, scrap and some
-    books remain.
-  industrialize#full: >
-    Reach machine manufacturing and energy use per person comparable to the
-    mid-20th century.
-  industrialize#early: >
-    Reach mechanized production comparable to Britain around 1800: factories
-    driven by water wheels and early steam, iron made in quantity.
-  easy-fuel: >
-    Coal, oil and gas that people with pre-industrial tools can reach: surface
-    seams, shallow pits, seeps and shallow wells.
+  collapse: A global catastrophe that ends industrial production and long-distance trade and leaves survivors at pre-industrial technology. Ruins, scrap and some books remain.
+  easy-fuel: "Coal, oil and gas that people with pre-industrial tools can reach: surface seams, shallow pits, seeps and shallow wells."
 
 claims:
   never-again:
@@ -31,41 +21,15 @@ claims:
     text: The first time, no society managed to {industrialize#full} without burning {easy-fuel}.
     because: [coal-drove-takeoff, no-fossil-free-case]
 
-  coal-drove-takeoff:
-    text: Britain's industrial take-off ran on coal, which by the 1840s was the main energy source for industry and rail.
-    bet:
-      trust: corroborated
-      note: >
-        Standard economic history (Wrigley, Allen). Histories of coal mining
-        date coal's dominance to about 1842.
-
-  no-fossil-free-case:
-    text: Every society that has reached {industrialize#full|full industrialization} burned fossil fuels on the way.
-    bet:
-      trust: track-record
-      note: >
-        True of every historical case, but the cases are not independent: each
-        country copied the ones before it.
-
   # --- Premise 2 -----------------------------------------------------------
   easy-fuel-gone:
     text: The {easy-fuel} has been used up, and what is left needs industrial machinery to reach.
     because: [easy-coal-mined-out, oil-needs-deep-drilling]
 
   easy-coal-mined-out:
-    text: The shallow coal that early miners could reach with hand tools has largely been mined out.
-    bet:
-      trust: assumed
-      note: Plausible for the old coalfields of Britain and Europe. Not checked for the rest of the world.
-
-  oil-needs-deep-drilling:
-    text: The oil and gas that remain lie deep underground or offshore, beyond pre-industrial drilling.
-    bet:
-      trust: corroborated
-      note: >
-        Dartnell ("Out of the ashes", Aeon, 2015) says the most easily drained
-        crude has already been consumed; consistent with the industry's move
-        to deep water and shale.
+    text: The coal that hand tools can reach, from outcrops, bell pits and drift mines, has been worked out in the coalfields that the first industrial countries mined.
+    because: [early-mining-was-shallow, british-mining-went-deep, other-early-coalfields-worked-out]
+    note: "Was a bet (assumed): Plausible for the old coalfields of Britain and Europe. Not checked for the rest of the world."
 
   # --- Premise 3 -----------------------------------------------------------
   no-substitute:
@@ -94,35 +58,17 @@ claims:
     text: After a {collapse}, a second attempt would need the same inputs as the first.
     bet:
       trust: assumed
-      note: >
-        Hidden premise. The usual statement of the argument never says this,
-        but the conclusion does not follow without it.
+      note: Hidden premise. The usual statement of the argument never says this, but the conclusion does not follow without it.
 
   # --- Objections ----------------------------------------------------------
   early-industry-fossil-free:
     text: Britain began to {industrialize#early} on water and charcoal, so a society can {industrialize#early|industrialize} without fossil fuel.
     because: [mills-ran-on-water]
 
-  mills-ran-on-water:
-    text: The first cotton mills of the 1770s ran on water wheels, and iron was smelted with charcoal for centuries before coke.
-    bet:
-      trust: corroborated
-      note: Standard history. Arkwright's Cromford mill (1771) was water-powered.
-
-  coal-took-over:
-    text: Water and charcoal carried only the first decades; growth after about 1830, in railways, cheap iron and steam at scale, ran on coal and coke.
-    bet:
-      trust: corroborated
-      note: Same sources as coal-drove-takeoff.
-
   surface-coal-remains:
     text: Large coal seams still lie close enough to the surface to be dug without industrial machinery.
-    bet:
-      trust: assumed
-      note: >
-        Surface mines today work seams within roughly 50 to 80 m of the surface,
-        so shallow coal clearly exists. Whether hand tools can strip that much
-        overburden is unchecked.
+    because: [surface-mines-reach-80m, us-coal-two-thirds-surface, hand-tools-strip-20m]
+    note: "Was a bet (assumed): Surface mines today work seams within roughly 50 to 80 m of the surface, so shallow coal clearly exists. Whether hand tools can strip that much overburden is unchecked."
 
   slow-green-path:
     text: Hydropower and charcoal could carry a society from {industrialize#early|early industry} to {industrialize#full|full industrialization}, only more slowly.
@@ -133,12 +79,6 @@ claims:
     bet:
       trust: assumed
       note: Dartnell sketches an electrified path that largely bypasses combustion. Nobody has done it.
-
-  charcoal-iron-works-today:
-    text: Charcoal already smelts iron at industrial scale; Brazil makes millions of tonnes of pig iron a year with it.
-    bet:
-      trust: corroborated
-      note: FAO and Brazilian industry figures put it near 10 Mt a year at its peak, about a third of national output.
 
   head-start:
     text: After a {collapse}, survivors would start far ahead of where the first attempt started, so they would need less.
@@ -166,3 +106,36 @@ disputes:
   - [easy-coal-mined-out, surface-coal-remains]
   - [no-substitute, slow-green-path]
   - [same-inputs, head-start]
+log:
+  - at: 2026-11-13
+    by: claude-fable-5.2
+    did: refine
+    claim: easy-coal-mined-out
+    note: 'Split by region, and replaced "largely" with named workings. Weak point: mines also went deep because demand outgrew shallow supply, so "went deep" does not strictly show the shallow coal was exhausted.'
+    verdict: contested
+    bets: 17
+    sharp: 4
+  - at: 2026-11-13
+    by: claude-fable-5.2
+    did: refine
+    claim: surface-coal-remains
+    note: Separated what is documented (shallow coal exists and is mined today) from what is not (whether it can be reached without machines).
+    verdict: contested
+    bets: 19
+    sharp: 7
+  - at: 2026-11-14
+    by: claude-fable-5.2
+    did: reword
+    claim: easy-coal-mined-out
+    note: The check flagged "industrialize" used outside its pinned definition. Reworded to avoid the word.
+    verdict: contested
+    bets: 19
+    sharp: 7
+  - at: 2026-11-14
+    by: claude-fable-5.2
+    did: reword
+    claim: other-early-coalfields-worked-out
+    note: The check flagged "industrialize" used outside its pinned definition. Reworded to avoid the word.
+    verdict: contested
+    bets: 19
+    sharp: 7

@@ -171,7 +171,9 @@ attacks: [[o, c]]
 });
 
 test('the civilization argument loads and hinges on three disputes', () => {
-  const loaded = load(readFileSync(new URL('../arguments/second-industrialization.yaml', import.meta.url), 'utf8'));
+  const read = (path: string): string => readFileSync(new URL(`./fixtures/${path}`, import.meta.url), 'utf8');
+  const library = [{ name: 'claims/energy-and-industry.yaml', source: read('claims/energy-and-industry.yaml') }];
+  const loaded = load(read('arguments/second-industrialization.yaml'), library);
   assert.ok(loaded.ok, JSON.stringify(loaded.issues, null, 2));
   assert.deepEqual(
     loaded.issues.map((i) => i.code),

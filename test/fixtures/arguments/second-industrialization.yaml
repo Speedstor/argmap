@@ -1,0 +1,110 @@
+argmap: 1
+title: Could a collapsed civilization industrialize a second time?
+conclusion: never-again
+
+# Drafted by Claude as the first test of the format, 13 Nov 2026.
+# Trust labels are deliberately conservative: "corroborated" is used only where
+# a source was actually checked, and the note says which.
+# Claims not defined here come from the library in claims/.
+
+terms:
+  collapse: A global catastrophe that ends industrial production and long-distance trade and leaves survivors at pre-industrial technology. Ruins, scrap and some books remain.
+  easy-fuel: "Coal, oil and gas that people with pre-industrial tools can reach: surface seams, shallow pits, seeps and shallow wells."
+
+claims:
+  never-again:
+    text: After a {collapse}, humanity could never {industrialize#full} again.
+    because: [needed-easy-fuel, easy-fuel-gone, no-substitute, same-inputs]
+
+  # --- Premise 1 -----------------------------------------------------------
+  needed-easy-fuel:
+    text: The first time, no society managed to {industrialize#full} without burning {easy-fuel}.
+    because: [coal-drove-takeoff, no-fossil-free-case]
+
+  # --- Premise 2 -----------------------------------------------------------
+  easy-fuel-gone:
+    text: The {easy-fuel} has been used up, and what is left needs industrial machinery to reach.
+    because: [easy-coal-mined-out, oil-needs-deep-drilling]
+
+  easy-coal-mined-out:
+    text: The shallow coal that early miners could reach with hand tools has largely been mined out.
+    bet:
+      trust: assumed
+      note: Plausible for the old coalfields of Britain and Europe. Not checked for the rest of the world.
+
+  # --- Premise 3 -----------------------------------------------------------
+  no-substitute:
+    text: No other energy source within survivors' reach could carry a society all the way to {industrialize#full|full industrialization}.
+    because: [charcoal-cannot-scale, water-wind-too-small, modern-renewables-need-industry]
+
+  charcoal-cannot-scale:
+    text: Wood and charcoal cannot scale, because fuel forests compete with farmland long before output reaches industrial volume.
+    bet:
+      trust: assumed
+      note: The land-competition argument is common in writing on collapse. No numbers checked.
+
+  water-wind-too-small:
+    text: Water wheels and windmills give too little power, in too few places, to run heavy industry.
+    bet:
+      trust: assumed
+
+  modern-renewables-need-industry:
+    text: Solar panels, nuclear plants and large turbines cannot be built without an industrial base that already exists.
+    bet:
+      trust: track-record
+      note: Every such device made so far came out of a fossil-fuelled supply chain.
+
+  # --- Premise 4: unstated in the usual argument ----------------------------
+  same-inputs:
+    text: After a {collapse}, a second attempt would need the same inputs as the first.
+    bet:
+      trust: assumed
+      note: Hidden premise. The usual statement of the argument never says this, but the conclusion does not follow without it.
+
+  # --- Objections ----------------------------------------------------------
+  early-industry-fossil-free:
+    text: Britain began to {industrialize#early} on water and charcoal, so a society can {industrialize#early|industrialize} without fossil fuel.
+    because: [mills-ran-on-water]
+
+  surface-coal-remains:
+    text: Large coal seams still lie close enough to the surface to be dug without industrial machinery.
+    bet:
+      trust: assumed
+      note: Surface mines today work seams within roughly 50 to 80 m of the surface, so shallow coal clearly exists. Whether hand tools can strip that much overburden is unchecked.
+
+  slow-green-path:
+    text: Hydropower and charcoal could carry a society from {industrialize#early|early industry} to {industrialize#full|full industrialization}, only more slowly.
+    because: [hydro-is-old-tech, charcoal-iron-works-today]
+
+  hydro-is-old-tech:
+    text: Hydroelectric generators and electric motors are 19th-century inventions that need no fossil fuel to build or run.
+    bet:
+      trust: assumed
+      note: Dartnell sketches an electrified path that largely bypasses combustion. Nobody has done it.
+
+  head-start:
+    text: After a {collapse}, survivors would start far ahead of where the first attempt started, so they would need less.
+    because: [scrap-everywhere, books-survive]
+
+  scrap-everywhere:
+    text: Refined steel, copper and aluminium would lie in the ruins, needing far less energy to rework than ore needs to smelt.
+    bet:
+      trust: track-record
+      note: Recycling metal takes a fraction of the energy of smelting ore. How much scrap survives centuries of rust is unchecked.
+
+  books-survive:
+    text: Enough written knowledge would survive to skip centuries of trial and error.
+    bet:
+      trust: assumed
+      note: Depends on the kind of collapse. Paper and digital media both decay.
+
+# One-way attacks: if the attacker stands, the target falls.
+attacks:
+  - [early-industry-fossil-free, needed-easy-fuel]
+  - [coal-took-over, early-industry-fossil-free]
+
+# Open disputes: each side attacks the other, so neither is settled by the map.
+disputes:
+  - [easy-coal-mined-out, surface-coal-remains]
+  - [no-substitute, slow-green-path]
+  - [same-inputs, head-start]

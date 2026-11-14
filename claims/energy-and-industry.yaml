@@ -1,0 +1,79 @@
+# Claims about fuel, energy and industrial history that more than one argument can draw on.
+# A claim here is pulled into an argument only when that argument rests on it or is opposed by it.
+
+terms:
+  industrialize#full: Reach machine manufacturing and energy use per person comparable to the mid-20th century.
+  industrialize#early: "Reach mechanized production comparable to Britain around 1800: factories driven by water wheels and early steam, iron made in quantity."
+
+claims:
+  coal-drove-takeoff:
+    text: Britain's industrial take-off ran on coal, which by the 1840s was the main energy source for industry and rail.
+    bet:
+      trust: corroborated
+      note: Standard economic history (Wrigley, Allen). Histories of coal mining date coal's dominance to about 1842.
+
+  coal-took-over:
+    text: Water and charcoal carried only the first decades; growth after about 1830, in railways, cheap iron and steam at scale, ran on coal and coke.
+    bet:
+      trust: corroborated
+      note: Same sources as coal-drove-takeoff.
+
+  no-fossil-free-case:
+    text: Every society that has reached {industrialize#full|full industrialization} burned fossil fuels on the way.
+    bet:
+      trust: track-record
+      note: "True of every historical case, but the cases are not independent: each country copied the ones before it."
+
+  mills-ran-on-water:
+    text: The first cotton mills of the 1770s ran on water wheels, and iron was smelted with charcoal for centuries before coke.
+    bet:
+      trust: corroborated
+      note: Standard history. Arkwright's Cromford mill (1771) was water-powered.
+
+  charcoal-iron-works-today:
+    text: Charcoal already smelts iron at industrial scale; Brazil makes millions of tonnes of pig iron a year with it.
+    bet:
+      trust: corroborated
+      note: FAO and Brazilian industry figures put it near 10 Mt a year at its peak, about a third of national output.
+
+  oil-needs-deep-drilling:
+    text: The oil and gas that remain lie deep underground or offshore, beyond pre-industrial drilling.
+    bet:
+      trust: corroborated
+      note: Dartnell ("Out of the ashes", Aeon, 2015) says the most easily drained crude has already been consumed; consistent with the industry's move to deep water and shale.
+
+  early-mining-was-shallow:
+    text: Early British coal mining worked seams at or close to the surface, through outcrops, bell pits and drift mines.
+    bet:
+      trust: track-record
+      note: 'One source checked: the standard history of coal mining (Wikipedia, "History of coal mining").'
+
+  british-mining-went-deep:
+    text: As the Industrial Revolution progressed, British coal mining moved from surface workings to deep shafts.
+    bet:
+      trust: track-record
+      note: Same single source as early-mining-was-shallow.
+
+  other-early-coalfields-worked-out:
+    text: In the other coalfields mined heavily in the 19th century (the Ruhr, Pennsylvania, Belgium and northern France), the seams hand tools can reach have also been worked out.
+    bet:
+      trust: assumed
+      note: "Not checked. To check: the mining history of each field."
+
+  surface-mines-reach-80m:
+    text: Surface mines today work coal seams lying within about 50 to 80 m of the surface.
+    bet:
+      trust: corroborated
+      note: "Three sources agree on the range: Science ABC (50 to 80 m), the NEED Project (within 200 feet), Wikipedia on coal mining (under about 55 m, sometimes to 90 m)."
+
+  us-coal-two-thirds-surface:
+    text: More than two-thirds of the coal mined in the United States comes from surface mines.
+    bet:
+      trust: track-record
+      note: 'One source checked: the NEED Project, "Coal at a glance".'
+
+  hand-tools-strip-20m:
+    text: People with hand tools and draft animals can remove 20 m of soil and rock lying over a coal seam.
+    bet:
+      trust: assumed
+      note: "Not checked, and the whole objection turns on it. To check: records of open-cast work before steam shovels, and of canal and railway cuttings dug by hand."
