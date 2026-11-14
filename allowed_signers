@@ -18,11 +18,10 @@
 # then add a line here with the contents of that .pub file after your name.
 # Only ssh-ed25519 keys are checked for now.
 #
-aldrin@person ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJOp/UAYTX6pE/zVydAdoiNfXCeFGgcmVWnykq7GTovu
-claude-fable-5.2@ai ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOLiVDU+9ISXVbqMM4aAJOLNy4SIETT9g1VAByO9n64a
+aldrin@person ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJOp/UAYTX6pE/zVydAdoiNfXCeFGgcmVWnykq7GTovu owner
 
-# The line below is a different key: the one that signed the commits made in
-# the Claude session that built this tool, before the key above existed.
-# Remove the "# " to trust those earlier commits too.
-#
-# claude-fable-5.2@ai ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKy87HxSEheG8vEPhSs9u2KZCtVErAQfpmprtUJCZ2w7
+# One identity, two keys. The name must stay claude-fable-5.2, because that is
+# the name on the reviews, evidence and log entries these keys sign for. Text
+# after a key is a free label saying which key it is.
+claude-fable-5.2@ai ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOLiVDU+9ISXVbqMM4aAJOLNy4SIETT9g1VAByO9n64a project key: private half is in the Thinking Tools project
+claude-fable-5.2@ai ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKy87HxSEheG8vEPhSs9u2KZCtVErAQfpmprtUJCZ2w7 init: Claude cloud workspace key that signed the commits that built the tool

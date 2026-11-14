@@ -96,12 +96,16 @@ after(() => rmSync(root, { recursive: true, force: true }));
 
 test('the list is read in the format git uses, and a certificate authority is not trusted by name', () => {
   assert.deepEqual(
-    signers.map((s) => [s.principal, s.name, s.kind]),
+    signers.map((s) => [s.principal, s.name, s.kind, s.label]),
     [
-      ['ann@person', 'ann', 'person'],
-      ['model-x@ai', 'model-x', 'ai'],
+      ['ann@person', 'ann', 'person', "Ann's laptop"],
+      ['model-x@ai', 'model-x', 'ai', undefined],
     ],
   );
+  // Two keys can carry the same name: one identity, signing from two places.
+  const two = parseSigners(`model-x@ai ${bot.listed} project key\nmodel-x@ai ${stranger.listed} workspace key\n`);
+  assert.deepEqual(two.map((s) => [s.name, s.label]), [['model-x', 'project key'], ['model-x', 'workspace key']]);
+  assert.notEqual(two[0]?.key, two[1]?.key);
 });
 
 test('commits are attributed by signature, and records must be in the signer\'s own name', () => {

@@ -14,6 +14,8 @@ export interface Signer {
   kind: 'person' | 'ai' | 'unknown';
   /** The public key, base64, as it appears in the list. */
   key: string;
+  /** The comment after the key, if any: a free description of which key this is. */
+  label?: string;
 }
 
 const KEY_TYPE = /^(ssh-|ecdsa-|sk-)/;
@@ -37,7 +39,10 @@ export function parseSigners(text: string): Signer[] {
       const at = principal.lastIndexOf('@');
       const suffix = at === -1 ? '' : principal.slice(at + 1);
       const kind = suffix === 'person' || suffix === 'ai' ? suffix : 'unknown';
-      out.push({ principal, name: kind === 'unknown' ? principal : principal.slice(0, at), kind, key: tokens[typeAt + 1] as string });
+      const signer: Signer = { principal, name: kind === 'unknown' ? principal : principal.slice(0, at), kind, key: tokens[typeAt + 1] as string };
+      const label = tokens.slice(typeAt + 2).join(' ');
+      if (label !== '') signer.label = label;
+      out.push(signer);
     }
   }
   return out;
