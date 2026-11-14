@@ -6,13 +6,22 @@ import type { LibrarySource, Loaded } from './index.ts';
 export const LIBRARY_DIR = 'claims';
 export const ARGUMENTS_DIR = 'arguments';
 
-/** The nearest folder above a file that holds a claims library, or the file's own folder. */
+const isDir = (path: string): boolean => existsSync(path) && statSync(path).isDirectory();
+
+/**
+ * The workspace a file or folder belongs to: the nearest folder above it that
+ * holds a claims library or an arguments folder. A workspace that has neither
+ * yet, as a new copy of the tool does, is the top of its git repository. A
+ * loose file outside any of these is its own workspace.
+ */
 export function findRoot(from: string): string {
   let dir = resolve(from);
   if (existsSync(dir) && !statSync(dir).isDirectory()) dir = dirname(dir);
+  else if (!existsSync(dir)) dir = dirname(dir);
   const start = dir;
   for (;;) {
-    if (existsSync(join(dir, LIBRARY_DIR)) && statSync(join(dir, LIBRARY_DIR)).isDirectory()) return dir;
+    if (isDir(join(dir, LIBRARY_DIR)) || isDir(join(dir, ARGUMENTS_DIR))) return dir;
+    if (existsSync(join(dir, '.git'))) return dir;
     const parent = dirname(dir);
     if (parent === dir) return start;
     dir = parent;
