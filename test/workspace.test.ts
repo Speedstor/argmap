@@ -5,10 +5,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Editor } from '../src/edit.ts';
 import { findRoot } from '../src/workspace.ts';
 
-const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'argmap.mjs');
+const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin');
+const CLI = join(BIN, 'argmap.mjs');
 const ARGUMENT = 'argmap: 1\ntitle: Opening hours\nconclusion: open-late\nclaims:\n  open-late: { text: Of 40 shops on the street, 30 open after 18:00., bet: assumed }\n';
 
 let dir: string;
@@ -91,4 +94,47 @@ test('an empty copy has a digest, and nothing due', () => {
   const due = argmap(dir, 'due', '--json');
   assert.equal(due.code, 0, due.out);
   assert.deepEqual(JSON.parse(due.out).due, []);
+});
+
+test('the MCP server starts in an empty copy and builds its first argument and library claim', async () => {
+  execFileSync('git', ['init', '-q', dir]);
+  const client = new Client({ name: 'argmap-test', version: '0' });
+  await client.connect(
+    new StdioClientTransport({
+      command: process.execPath,
+      args: [join(BIN, 'argmap-mcp.mjs')],
+      env: { ...(process.env as Record<string, string>), ARGMAP_ROOT: dir },
+    }),
+  );
+  const call = async (name: string, args: Record<string, unknown> = {}): Promise<{ error: boolean; text: string }> => {
+    const result = (await client.callTool({ name, arguments: args })) as { isError?: boolean; content: { text: string }[] };
+    return { error: result.isError === true, text: result.content[0]?.text ?? '' };
+  };
+  try {
+    assert.deepEqual(JSON.parse((await call('list_arguments')).text), []);
+    assert.deepEqual(JSON.parse((await call('search_claims', { query: '' })).text), []);
+    assert.equal((await call('due_predictions')).error, false);
+    assert.match((await call('report', { argument: 'hours' })).text, /none yet; use create_argument/);
+
+    const made = await call('create_argument', {
+      name: 'hours',
+      title: 'Do the shops on the street open late?',
+      conclusion_id: 'open-late',
+      conclusion_text: 'Of 40 shops on the street, 30 open after 18:00.',
+      by: 'model-x',
+    });
+    assert.equal(made.error, false, made.text);
+    const added = await call('add_claim', {
+      argument: 'hours',
+      claim: { id: 'street-counted', text: 'The street was counted on 3 March 2026.', trust: 'assumed' },
+      library_file: 'shops.yaml',
+      by: 'model-x',
+    });
+    assert.equal(added.error, false, added.text);
+    assert.ok(existsSync(join(dir, 'arguments', 'hours.yaml')));
+    assert.ok(existsSync(join(dir, 'claims', 'shops.yaml')));
+    assert.equal(JSON.parse((await call('list_arguments')).text).length, 1);
+  } finally {
+    await client.close();
+  }
 });

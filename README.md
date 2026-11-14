@@ -5,8 +5,13 @@ tells you what it rests on, where it is exposed, and what falls when a bet fails
 Like a build, it has tests: a prediction is written down before anyone checks,
 and one that fails knocks its claim out.
 
-**Reading this repository?** Start with the
-[digest](../../tree/digest): every argument
+**This repository is the tool only.** It holds no arguments, claims or
+notepads, so a copy of it starts empty. Arguments mapped in public are kept in
+[argmap-garden](https://github.com/Speedstor/argmap-garden), which is a copy
+of this repository. [Keep a private copy](#keep-a-private-copy) says how to
+make one.
+
+**Reading a copy?** Start with its [digest](../../tree/digest): every argument
 written out with its verdict, structure, open disputes and next steps. It is
 generated from `main` on each push and kept on the `digest` branch.
 
@@ -43,16 +48,23 @@ Needs Node 22.18 or later.
 
 ```sh
 npm install
-npm run argmap -- report arguments/second-industrialization.yaml
-npm run argmap -- next   arguments/second-industrialization.yaml
-npm run argmap -- knock  arguments/second-industrialization.yaml same-inputs
-npm run argmap -- search coal
-npm run argmap -- review arguments/second-industrialization.yaml same-inputs reject --by you --note "why"
+npm run argmap -- init   arguments/my-argument.yaml   # a small starter argument to edit
+npm run argmap -- report arguments/my-argument.yaml
+npm run argmap -- next   arguments/my-argument.yaml
+npm run argmap -- knock  arguments/my-argument.yaml a-bet
+npm run argmap -- search reason
+npm run argmap -- review arguments/my-argument.yaml a-bet reject --by you --note "why"
 npm run argmap -- due        # open predictions (see "Predictions" below)
 npm run argmap -- record     # what each name's predictions show
-npm run argmap -- view   arguments/second-industrialization.yaml -o dist/map.html
-npm run argmap -- init   arguments/my-argument.yaml
+npm run argmap -- view   arguments/my-argument.yaml -o dist/map.html
 npm test
+```
+
+The starter has five claims. For a full-size argument, with a claims library,
+evidence and a log of rounds, read the copy the tests use:
+
+```sh
+npm run argmap -- report test/fixtures/arguments/second-industrialization.yaml
 ```
 
 `view` writes one self-contained HTML page: a map of the argument where you can
@@ -93,7 +105,8 @@ listed in [docs/github-setup.md](docs/github-setup.md).
 The tool is public; your arguments do not have to be. A private copy is an
 ordinary private repository that starts as a copy of this one and keeps
 receiving its updates. It cannot be a GitHub fork, because a fork of a public
-repository is always public.
+repository is always public. A copy starts with no arguments, claims or
+notepads. A public copy is made the same way.
 
 Create an empty private repository on GitHub, then:
 
@@ -103,7 +116,7 @@ git remote rename origin upstream
 git remote set-url --push upstream DISABLED     # this clone can never push to the public repo
 git remote add origin https://github.com/YOU/argmap-private
 git push -u origin main
-git push origin upstream/ideas:refs/heads/ideas  # optional: the notepads and their workflow
+git push origin upstream/ideas:refs/heads/ideas  # optional: the workflow that merges notepad pull requests
 ```
 
 From then on:
@@ -264,9 +277,9 @@ tools read that branch directly and write to it without checking it out, so
 you can stay on your working branch:
 
 ```sh
-npm run argmap -- notepad arguments/second-industrialization.yaml --by you
-npm run argmap -- idea arguments/second-industrialization.yaml "what about peat? [[easy-coal-mined-out]]" --by you
-npm run argmap -- ideas arguments/second-industrialization.yaml
+npm run argmap -- notepad arguments/my-argument.yaml --by you
+npm run argmap -- idea arguments/my-argument.yaml "has anyone checked this? [[a-bet]]" --by you
+npm run argmap -- ideas arguments/my-argument.yaml
 git push origin ideas
 ```
 
@@ -394,8 +407,8 @@ These follow from the bets as written. None of them means "true".
 | --- | --- |
 | `docs/format.md` | The argument file format |
 | `docs/github-setup.md` | The settings to change by hand on GitHub: branch rules, merge buttons, notifications |
-| `arguments/` | Argument files. Each one is data; adding one needs no code |
-| `claims/` | The shared claims library |
+| `arguments/` | Argument files. Each one is data; adding one needs no code. None here: a copy adds its own |
+| `claims/` | The shared claims library. None here either |
 | `src/` | The engine: parsing, checks, evaluation, analysis, lint, reviews. Deterministic, no AI |
 | `src/edit.ts`, `src/mcp.ts` | Safe edits to the files, and the MCP server built on them |
 | `src/ideas.ts`, `src/verify.ts`, `src/sign.ts` | Notepads on the ideas branch; checking and making signatures |
@@ -406,7 +419,7 @@ These follow from the bets as written. None of them means "true".
 | `.github/workflows/ci.yml` | Tests and `verify` on every pull request; writes the digest to the `digest` branch from `main` |
 | `.github/workflows/due.yml`, `scripts/due-issues.mjs` | Opens an issue each day for every prediction that has come due |
 | `scripts/update-from-upstream.sh`, `.github/workflows/update-from-upstream.yml` | Bring a private copy up to date with this repository |
-| `test/` | Engine, MCP server, digest and update tests |
+| `test/` | Engine, MCP server, digest, workspace and update tests. `test/fixtures/` holds a full-size argument for them |
 
 Turning prose into an argument file is the one step that needs judgment (a
 person, or a language model whose draft a person corrects). Everything after
