@@ -89,7 +89,7 @@ function describeEdit(result: EditResult): unknown {
   };
 }
 
-const argument = z.string().describe('The argument: its file name without extension (e.g. "second-industrialization"), or its path in the workspace.');
+const argument = z.string().describe('The argument: its file name without extension (e.g. "my-argument"), or its path in the workspace.');
 const by = z.string().min(1).describe('Who is making this change: a person\'s name or a model name. Recorded in the log.');
 const trust = z.enum(TRUST_LEVELS).describe('How far a bet has been checked: observed (seen first-hand), corroborated (independent sources agree), track-record (this kind of claim has held up before), assumed (not checked).');
 const newClaim = z.object({

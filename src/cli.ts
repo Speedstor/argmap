@@ -439,6 +439,7 @@ async function main(argv: string[]): Promise<number> {
     case 'init': {
       if (!file) fail(USAGE);
       if (existsSync(file)) fail(`${file} already exists.`);
+      mkdirSync(dirname(resolve(file)), { recursive: true });
       writeFileSync(file, STARTER);
       console.log(`Wrote ${file}. Edit it, then run: argmap report ${file}`);
       return 0;
