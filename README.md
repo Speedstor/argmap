@@ -35,6 +35,31 @@ knock out any claim, side with either party in a dispute, and watch the verdict
 change. It also shows what to do next, the reviews on each claim, and the log
 of rounds. The page can load any other argument file by paste or upload.
 
+## The digest
+
+`digest` writes the repository out as Markdown, to be read in one pass. It is
+made mainly for a model starting a session, and reads fine on GitHub too.
+
+```sh
+npm run argmap -- digest -o dist/digest
+```
+
+It puts what the engine computes next to what the files say: the status of
+every claim, the structure as an indented outline, what each open dispute
+decides, how exposed each bet is, and what to do next. There is one page per
+argument, one for the claims library, and an index that also lists the trusted
+keys and what each name has on record.
+
+- Every claim is named by its id, so searching for an id finds everything
+  about it. There are no links.
+- Claim text is given as written, with its pinned-term markers.
+- Nothing in the digest is a source. It is generated, and the same files
+  always give the same digest.
+
+`.github/workflows/ci.yml` runs the type check and the tests on every pull
+request and every push to `main`. From `main` it also writes the digest to the
+`digest` branch, so it can be read without cloning or installing anything.
+
 ## Working in rounds
 
 An argument starts coarse. Each round makes it finer:
@@ -211,7 +236,9 @@ These follow from the bets as written. None of them means "true".
 | `src/ideas.ts`, `src/verify.ts`, `src/sign.ts` | Notepads on the ideas branch; checking and making signatures |
 | `allowed_signers` | The public list of trusted keys |
 | `viewer/` | The interactive page, bundled by `scripts/build.mjs` |
-| `test/` | Engine and MCP server tests |
+| `src/digest.ts` | The repository written out as Markdown, to read in one pass |
+| `.github/workflows/ci.yml` | Tests on every change; writes the digest to the `digest` branch from `main` |
+| `test/` | Engine, MCP server and digest tests |
 
 Turning prose into an argument file is the one step that needs judgment (a
 person, or a language model whose draft a person corrects). Everything after
