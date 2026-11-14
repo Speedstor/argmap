@@ -4,7 +4,7 @@ A build system for beliefs. Write an argument as a plain text file, and argmap
 tells you what it rests on, where it is exposed, and what falls when a bet fails.
 
 **Reading this repository?** Start with the
-[digest](https://github.com/Speedstor/argmap/tree/digest): every argument
+[digest](../../tree/digest): every argument
 written out with its verdict, structure, open disputes and next steps. It is
 generated from `main` on each push and kept on the `digest` branch.
 
