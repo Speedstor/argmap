@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { analyze, nextSteps, REVIEWER_KINDS, toYaml, VERDICTS } from './index.ts';
 import type { ReviewerKind, Verdict } from './index.ts';
@@ -8,7 +8,9 @@ import { addIdea, createNotepad, ideasFor, IdeasError } from './ideas.ts';
 import type { Idea } from './ideas.ts';
 import { searchClaims } from './search.ts';
 import { parseSigners, readSigners, verifyRange } from './verify.ts';
-import { refExists } from './git.ts';
+import { git, isRepo, refExists } from './git.ts';
+import { parsePrivateKey, publicLine, SignError } from './sign.ts';
+import { fileURLToPath } from 'node:url';
 import { findRoot, loadFile } from './workspace.ts';
 import type { LoadedFile } from './workspace.ts';
 
@@ -28,6 +30,7 @@ Usage
                                     Add a note to a notepad
   argmap verify [<range>] [--signers <file>]
                                     Check commits are signed by a listed key, in the signer's own name
+  argmap use-key <private key file> Sign this clone's commits with that key (no ssh-keygen needed)
   argmap bundle <file>              Print the argument with its library claims inlined
   argmap view   <file> [-o out]     Write a self-contained HTML viewer
   argmap init   <file>              Write a starter argument file
@@ -220,6 +223,34 @@ async function main(argv: string[]): Promise<number> {
       }
       console.log(`${checks.length - bad} of ${checks.length} commits in ${range} pass.`);
       return bad === 0 ? 0 : 1;
+    }
+    case 'use-key': {
+      if (!file) fail(USAGE);
+      if (!existsSync(file)) fail(`No such file: ${file}`);
+      const root = process.cwd();
+      if (!isRepo(root)) fail('Run this inside the git clone whose commits should be signed.');
+      let line: string;
+      try {
+        line = publicLine(parsePrivateKey(readFileSync(file, 'utf8')));
+      } catch (e) {
+        if (e instanceof SignError) fail(e.message);
+        throw e;
+      }
+      const helper = fileURLToPath(new URL('../bin/argmap-ssh-sign.mjs', import.meta.url));
+      git(root, ['config', 'gpg.format', 'ssh']);
+      git(root, ['config', 'gpg.ssh.program', helper]);
+      git(root, ['config', 'user.signingkey', resolve(file)]);
+      git(root, ['config', 'commit.gpgsign', 'true']);
+      const listed = parseSigners(readSigners(findRoot(root)).text).filter((signer) => line.endsWith(signer.key));
+      console.log(`Commits in this clone will now be signed with: ${line}`);
+      if (listed.length > 0) {
+        const who = listed[0] as (typeof listed)[number];
+        console.log(`That key is trusted as ${who.principal}${who.label ? ` [${who.label}]` : ''}.`);
+        console.log(`Record reviews, evidence and log entries as by "${who.name}"${who.kind === 'unknown' ? '' : `, kind ${who.kind}`}, or verify will reject them.`);
+      } else {
+        console.log('That key is not in allowed_signers, so verify will reject these commits until it is added on main.');
+      }
+      return 0;
     }
     case 'bundle': {
       const loaded = open(file);

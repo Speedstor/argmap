@@ -140,6 +140,17 @@ means the agent its operator gave the key to, not which model wrote the text.
 Signatures are checked with the public key alone, in the tool itself, so no
 extra software is needed. Only `ssh-ed25519` keys are supported so far.
 
+Signing normally needs `ssh-keygen`. Where that is missing, argmap ships a
+small helper that does the same job for a key without a passphrase:
+
+```sh
+npm run argmap -- use-key ~/.ssh/argmap_key
+```
+
+That points this clone's git at the helper and the key, and tells you which
+name on the list the key is trusted as. Records you add must be in that name.
+Text after a key in `allowed_signers` is a free label, shown by `verify`.
+
 Notepads are deliberately outside this: editing one on GitHub from a phone
 produces a commit your own key did not sign, and loose notes do not need the
 same guarantee.
@@ -197,7 +208,7 @@ These follow from the bets as written. None of them means "true".
 | `claims/` | The shared claims library |
 | `src/` | The engine: parsing, checks, evaluation, analysis, lint, reviews. Deterministic, no AI |
 | `src/edit.ts`, `src/mcp.ts` | Safe edits to the files, and the MCP server built on them |
-| `src/ideas.ts`, `src/verify.ts` | Notepads on the ideas branch; signature checks |
+| `src/ideas.ts`, `src/verify.ts`, `src/sign.ts` | Notepads on the ideas branch; checking and making signatures |
 | `allowed_signers` | The public list of trusted keys |
 | `viewer/` | The interactive page, bundled by `scripts/build.mjs` |
 | `test/` | Engine and MCP server tests |
