@@ -29,5 +29,6 @@ The tools read this branch directly. It is never merged into `main`.
 ## Pull requests
 
 A pull request into this branch is approved and merged automatically when it
-comes from someone with access to the repository and changes only notepad
-files (`ideas/**/*.md`). Anything else waits for a person.
+comes from a branch in this repository, from someone with access, and changes
+only notepad files (`ideas/**/*.md`). Anything else, including a pull request
+from a fork, waits for a person.

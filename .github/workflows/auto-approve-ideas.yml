@@ -1,16 +1,27 @@
-# Approve and merge pull requests into the ideas branch, when they are from
-# someone with access to the repository and touch only notepad files.
+# Approve and merge pull requests into the ideas branch, when they come from a
+# branch in this repository, from someone with access, and touch only notepad
+# files.
 #
-# This runs on pull_request_target, so it uses this file as it is on the ideas
-# branch, never the copy in the pull request, and it never checks out or runs
-# code from the pull request.
+# This runs on pull_request, so GitHub reads this file from the pull request
+# merged with the ideas branch. It used to run on pull_request_target, which
+# cannot work here: since December 2025 GitHub reads those workflows from the
+# default branch (main) only, and from 2 December 2026 it blocks that event in
+# public repositories by default.
+#
+# What this means for trust:
+# - A pull request from a fork gets a read-only token from GitHub, so it can
+#   never approve or merge itself. It waits for a person.
+# - A pull request from a branch in this repository could change this file.
+#   Only someone who can already push to the repository can open one.
+#
+# The job never checks out or runs code from the pull request.
 #
 # Needs one repository setting: Settings > Actions > General > Workflow
 # permissions > "Allow GitHub Actions to create and approve pull requests".
 name: Auto-approve ideas
 
 on:
-  pull_request_target:
+  pull_request:
     branches: [ideas]
     types: [opened, synchronize, reopened]
 
@@ -25,11 +36,17 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number }}
       REPO: ${{ github.repository }}
+      HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       ASSOCIATION: ${{ github.event.pull_request.author_association }}
     steps:
       - name: Check who is asking and what changed
         id: check
         run: |
+          if [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "This pull request comes from a fork. Leaving this for a person."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           case "$ASSOCIATION" in
             OWNER|MEMBER|COLLABORATOR) ;;
             *)
