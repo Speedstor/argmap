@@ -2,6 +2,8 @@
 
 A build system for beliefs. Write an argument as a plain text file, and argmap
 tells you what it rests on, where it is exposed, and what falls when a bet fails.
+Like a build, it has tests: a prediction is written down before anyone checks,
+and one that fails knocks its claim out.
 
 **Reading this repository?** Start with the
 [digest](../../tree/digest): every argument
@@ -14,7 +16,7 @@ They are kept on the `ideas` branch, which is never merged into `main`.
 
 It does not tell you what is true. Every chain of justification ends somewhere
 you chose to stop and trust (Agrippa's trilemma), so argmap makes those stopping
-points visible instead of hiding them:
+points visible instead of hiding them, and gives each one a way to be tested:
 
 1. **Does the reasoning hold together?** Structure checks, and checks on pinned
    terms so a word cannot quietly change meaning between steps.
@@ -22,6 +24,18 @@ points visible instead of hiding them:
    how far it has been checked.
 3. **Where am I exposed?** Which bets change the conclusion if they fail, and
    which open disputes the conclusion hinges on.
+4. **Has the world been asked?** Before a bet is checked, someone writes down
+   what they expect to find and how sure they are. A failed test that someone
+   vouching for the claim accepted beforehand knocks the claim out, the way a
+   failing test breaks a build.
+
+The first three are answered from the file alone. They show whether an
+argument holds together and what it leans on, not whether its bets match the
+world. Predictions are where the map meets the world. They still do not say
+what is true: a passed test changes no status, and a trust label stays a typed
+judgment. What they add is that being wrong becomes quick to notice and hard to
+hide, because the guess is on record, in its author's name, before the answer
+is. The rules are under [Predictions](#predictions-let-the-world-grade-it).
 
 ## Try it
 
