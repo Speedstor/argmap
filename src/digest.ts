@@ -4,7 +4,7 @@ import { analyze, attackersOf, claimRecord, describeTest, independentSources, li
 import { allPredictions, formatRecord, records as nameRecords } from './record.ts';
 import type { Analysis, Argument, Claim, Flag, RawFile, Resolution, Status, Step, Term } from './index.ts';
 import { isRepo, tryGit } from './git.ts';
-import { parseSigners, readSigners } from './verify.ts';
+import { parseSigners, readSigners, verifyRange } from './verify.ts';
 import { argumentFiles, libraryFiles, loadFile } from './workspace.ts';
 import type { LoadedFile } from './workspace.ts';
 
@@ -330,6 +330,34 @@ function libraryPage(root: string, library: RawFile[], entries: Entry[]): string
   return out.join('\n');
 }
 
+/**
+ * Whether the history behind this digest passes "argmap verify". Statuses are
+ * worked out from the files as they stand, so a reader needs to know whether
+ * those files got here by commits that verify refuses.
+ */
+function historyCheck(root: string): string[] {
+  if (!isRepo(root) || tryGit(root, ['rev-parse', '--verify', '--quiet', 'HEAD']) === undefined) return [];
+  if (tryGit(root, ['rev-parse', '--is-shallow-repository']) === 'true') {
+    return ['Not run: this copy of the repository does not hold its full history, so the commits cannot be checked.'];
+  }
+  const signers = parseSigners(readSigners(root).text);
+  if (signers.length === 0) return ['Not run: there is no list of trusted keys to check signatures against.'];
+  let checks: ReturnType<typeof verifyRange>;
+  try {
+    checks = verifyRange(root, 'HEAD', signers);
+  } catch {
+    return ['Not run: the history could not be read.'];
+  }
+  const refused = checks.filter((c) => c.problems.length > 0);
+  if (refused.length === 0) return [`All ${count(checks.length, 'commit')} pass ${code('argmap verify')}. Every status in this digest rests on history that verify accepts.`];
+  return [
+    `${refused.length} of ${count(checks.length, 'commit')} are refused by ${code('argmap verify')}. The statuses in this digest are worked out from the files as they stand, and those files include what these commits did:`,
+    '',
+    ...refused.slice(0, 20).map((c) => `- ${code(c.commit.slice(0, 7))} ${one(c.subject)}: ${one(c.problems[0] ?? '')}${c.problems.length > 1 ? ` (and ${c.problems.length - 1} more)` : ''}`),
+    ...(refused.length > 20 ? [`- and ${refused.length - 20} more commits`] : []),
+  ];
+}
+
 function indexPage(root: string, entries: Entry[], library: RawFile[]): string {
   const out = [
     '# argmap digest',
@@ -345,9 +373,10 @@ function indexPage(root: string, entries: Entry[], library: RawFile[]): string {
     '- A claim with no review line has not been reviewed.',
     '- Notepads are not here. They are plain Markdown on the `ideas` branch: `ideas/<argument file name>.md` and `ideas/claims/<claim id>.md`.',
     '',
-    '## Arguments',
-    '',
   ];
+  const history = historyCheck(root);
+  if (history.length > 0) out.push('## History check', '', ...history, '');
+  out.push('## Arguments', '');
   if (entries.length === 0) out.push('None yet.', '');
   for (const e of entries) {
     const arg = e.loaded.argument;

@@ -420,6 +420,19 @@ function parsePairs(raw: unknown, name: 'attacks' | 'disputes', issues: Issue[])
   return pairs;
 }
 
+/**
+ * Write down, on each claim, what the terms it pins are defined as. A term with
+ * no definition in reach is recorded as such, so adding one later also counts
+ * as a change.
+ */
+export function pinClaims(claims: Iterable<Claim>, terms: ReadonlyMap<string, Term>): void {
+  for (const claim of claims) {
+    const keys = [...new Set(termKeys(claim.text))].sort();
+    if (keys.length === 0) delete claim.pinned;
+    else claim.pinned = JSON.stringify(keys.map((key) => [key, terms.get(key)?.definition ?? null]));
+  }
+}
+
 /** Read one file's shape. Cross-references are checked later, once any library is merged in. */
 export function parseFile(source: string, name = ''): RawFile {
   const raw: RawFile = {
@@ -497,6 +510,8 @@ export function parseFile(source: string, name = ''): RawFile {
   raw.attacks = parsePairs(doc['attacks'], 'attacks', issues);
   raw.disputes = parsePairs(doc['disputes'], 'disputes', issues);
   raw.log = parseLog(doc['log'], issues);
+  // With only this file's terms. A claim that pins a term from another file is pinned again when the files are combined.
+  pinClaims(raw.claims.values(), raw.terms);
   return raw;
 }
 
@@ -573,6 +588,8 @@ export function assemble(main: RawFile, library: RawFile[] = []): ParseResult {
       }
     }
   }
+
+  pinClaims(claims.values(), terms);
 
   // Leaves are bets; derived claims are not.
   for (const claim of claims.values()) {

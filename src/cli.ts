@@ -341,7 +341,8 @@ async function main(argv: string[]): Promise<number> {
         return 1;
       }
       // In a pull request, a prediction and its outcome may not arrive together: the prediction has to be on main first.
-      const checks = verifyRange(root, range, signers, { separate: args.includes('--pull-request') });
+      // A commit dated in the future is refused: the clock here is the one bound on dates that the committer does not set.
+      const checks = verifyRange(root, range, signers, { separate: args.includes('--pull-request'), notAfter: Math.floor(Date.now() / 1000) });
       let bad = 0;
       for (const check of checks) {
         const fine = check.problems.length === 0;

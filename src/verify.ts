@@ -2,11 +2,11 @@ import { createHash, createPublicKey, verify as verifySignature } from 'node:cry
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { git, gitBuffer, refExists, tryGit } from './git.ts';
-import { parseFile } from './parse.ts';
+import { parseFile, pinClaims } from './parse.ts';
 import type { RawFile } from './parse.ts';
 import { vouchers } from './predict.ts';
 import { claimRev } from './review.ts';
-import type { Prediction, Signed } from './types.ts';
+import type { Prediction, Signed, Term } from './types.ts';
 
 export const SIGNERS_FILE = 'allowed_signers';
 
@@ -295,6 +295,9 @@ function predictionProblems(before: Map<string, Tracked>, after: Map<string, Tra
     if (!old) {
       mine(now, name);
       if (now.rev !== now.claimRev) problems.push(`${path}: ${name} does not carry the fingerprint of the claim it is recorded on. A prediction tests the claim as it reads when the prediction is made.`);
+      if (now.vouchers.includes(now.by) && !now.accepted.some((a) => a.by === now.by)) {
+        problems.push(`${path}: ${now.by} vouches for "${now.claim}" and set ${name} without accepting it. Someone who vouches for a claim stands behind the tests they set on it.`);
+      }
       if (!nearDay(now.made, commitDay)) problems.push(`${path}: ${name} says it was made on ${now.made}, but the commit that records it is dated ${commitDay}.`);
       if (now.outcome !== undefined) problems.push(`${path}: ${name} arrived together with its outcome. The prediction must be recorded first, in an earlier commit.`);
       if (now.overdue) problems.push(`${path}: ${name} arrived already marked overdue.`);
@@ -351,10 +354,36 @@ function added(before: string[], after: string[]): string[] {
  * needs a trusted signature, and what it adds beyond its parents must be in the
  * signer's name.
  */
-export function verifyRange(root: string, range: string, signers: Signer[], options: { separate?: boolean } = {}): CommitCheck[] {
+export interface VerifyOptions {
+  /** Refuse a prediction and its outcome in the same range. For a pull request: the prediction must be on main first. */
+  separate?: boolean;
+  /** Refuse a commit dated after this moment, in seconds since 1970. The command line passes the present time. */
+  notAfter?: number;
+}
+
+/** How far a commit's date may run ahead of the clock, or behind its parent's, before it is refused. Covers clocks that disagree. */
+const SKEW_SECONDS = 60 * 60;
+
+export function verifyRange(root: string, range: string, signers: Signer[], options: VerifyOptions = {}): CommitCheck[] {
   const commits = git(root, ['rev-list', '--reverse', range]).split('\n').filter(Boolean);
   const byKey = new Map(signers.map((s) => [s.key, s]));
   const checks: CommitCheck[] = [];
+  const dateOf = (rev: string): number => Number(git(root, ['log', '-1', '--format=%ct', rev]));
+  const day = (seconds: number): string => new Date(seconds * 1000).toISOString().slice(0, 10);
+  // The terms defined in the claims library at a commit. A claim's fingerprint takes in the definitions of the terms it pins.
+  const libraryTerms = new Map<string, Map<string, Term>>();
+  const termsAt = (rev: string): Map<string, Term> => {
+    let terms = libraryTerms.get(rev);
+    if (!terms) {
+      terms = new Map();
+      for (const path of (tryGit(root, ['ls-tree', '-r', '--name-only', rev, '--', 'claims']) ?? '').split('\n').filter((name) => /\.ya?ml$/.test(name))) {
+        const text = tryGit(root, ['show', `${rev}:${path}`]);
+        if (text !== undefined) for (const [key, term] of parseFile(text, path).terms) terms.set(key, term);
+      }
+      libraryTerms.set(rev, terms);
+    }
+    return terms;
+  };
   /** Predictions first recorded inside this range, with the commit that brought each in. */
   const born = new Map<string, string>();
   for (const commit of commits) {
@@ -362,6 +391,13 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
     const parents = git(root, ['log', '-1', '--format=%P', commit]).split(' ').filter(Boolean);
     const merge = parents.length > 1 ? mergeKind(root, commit, parents) : undefined;
     if (merge) check.merge = merge.kind;
+
+    // A commit's date is typed by whoever makes it. Two bounds keep it honest without a clock of our own:
+    // it cannot be earlier than the commit it builds on, and it cannot be later than now.
+    const dated = dateOf(commit);
+    const newest = Math.max(0, ...parents.map(dateOf));
+    if (dated < newest - SKEW_SECONDS) check.problems.push(`dated ${day(dated)}, before the commit it builds on (${day(newest)}). A commit cannot be older than its parent.`);
+    if (options.notAfter !== undefined && dated > options.notAfter + SKEW_SECONDS) check.problems.push(`dated ${day(dated)}, which has not happened yet.`);
 
     const unsigned: string[] = [];
     const { payload, signature } = splitCommit(gitBuffer(root, ['cat-file', 'commit', commit]));
@@ -394,11 +430,19 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
       // Predictions are followed across every file the commit touches, so moving a claim to another file does not look like deleting its tests.
       const hadPredictions = new Map<string, Tracked>();
       const hasPredictions = new Map<string, Tracked>();
-      const commitDay = git(root, ['log', '-1', '--format=%cI', commit]).slice(0, 10);
+      const commitDay = day(dated);
+      /** Trust labels across every file the commit touches: before (one map per parent) and now. */
+      const labelsBefore = parents.map(() => new Map<string, { trust: string; by?: string }>());
+      const labelsNow = new Map<string, { trust: string; by?: string }>();
+      /** Claims that exist now and rest on other claims, so are no longer bets. */
+      const supportedNow = new Set<string>();
       for (const path of changed) {
         const read = (rev: string): RawFile | undefined => {
           const text = tryGit(root, ['show', `${rev}:${path}`]);
-          return text === undefined ? undefined : parseFile(text, path);
+          if (text === undefined) return undefined;
+          const file = parseFile(text, path);
+          pinClaims(file.claims.values(), new Map([...termsAt(rev), ...file.terms]));
+          return file;
         };
         const now = read(commit);
         const was = parents.map(read);
@@ -406,18 +450,12 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
         track(now, hasPredictions);
         for (const issue of now?.issues ?? []) if (issue.code === 'prediction-shape') check.problems.push(`${path}: ${issue.message}`);
 
-        // A trust label carries the name of whoever set it, and that name vouches for the bet. A signer can put down
-        // only their own name, and cannot change or strip a label that carries someone else's without taking it over.
-        const before = was.map(labels);
-        for (const [id, label] of labels(now)) {
-          if (before.length > 0 && before.some((b) => b.get(id)?.trust === label.trust && b.get(id)?.by === label.by)) continue;
-          const earlier = before[0]?.get(id);
-          if (label.by !== undefined && label.by !== signer.name) {
-            check.problems.push(`${path}: the trust label on "${id}" is recorded as set by "${label.by}", but the commit was signed by ${signer.principal}`);
-          } else if (earlier?.by !== undefined && earlier.by !== signer.name && label.by !== signer.name) {
-            check.problems.push(`${path}: the trust label on "${id}" carried ${earlier.by}'s name, and ${signer.principal} changed it without putting their own name on it`);
-          }
-        }
+        was.forEach((file, at) => {
+          for (const [id, label] of labels(file)) (labelsBefore[at] as Map<string, { trust: string; by?: string }>).set(id, label);
+        });
+        for (const [id, label] of labels(now)) labelsNow.set(id, label);
+        for (const claim of now?.claims.values() ?? []) if (claim.because.length > 0) supportedNow.add(claim.id);
+        const fingerprints = new Map([...(now?.claims.values() ?? [])].map((claim) => [claim.id, claimRev(claim)]));
 
         const after = recordsOf(now);
         const earlierRecords = was.map(recordsOf);
@@ -429,10 +467,15 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
           return (perParent[0] ?? []).filter((item) => perParent.every((list) => list.includes(item)));
         };
         for (const item of added(known('reviews'), after.reviews)) {
-          const [claim, by, kind] = JSON.parse(item) as [string, string, string];
+          const [claim, by, kind, , , , rev] = JSON.parse(item) as [string, string, string, string, string, string, string];
           if (by !== signer.name) check.problems.push(`${path}: a review of "${claim}" is recorded as by "${by}", but the commit was signed by ${signer.principal}`);
           else if (signer.kind !== 'unknown' && kind !== signer.kind) {
             check.problems.push(`${path}: the review of "${claim}" says its reviewer is ${kind === 'ai' ? 'an AI' : 'a person'}, but ${signer.principal} is listed as ${signer.kind === 'ai' ? 'an AI' : 'a person'}`);
+          }
+          // A new review has to say which wording it judged, with the full fingerprint. With the short one or none,
+          // it would carry over to a wording the reviewer never saw.
+          if (rev !== fingerprints.get(claim)) {
+            check.problems.push(`${path}: the review of "${claim}" by ${by} ${rev === '' ? 'carries no fingerprint' : 'does not carry the fingerprint'} of the claim as it reads. Record reviews with "argmap review" or the add_review tool, which write it.`);
           }
         }
         for (const item of added(known('evidence'), after.evidence)) {
@@ -455,6 +498,25 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
           const [by] = JSON.parse(item) as [string];
           if (by !== signer.name) check.problems.push(`${path}: a log entry by ${by} was changed or removed by ${signer.principal}. The log is a record, and a signer can take back only what is in their own name.`);
         }
+      }
+      // A trust label carries the name of whoever set it, and that name vouches for the bet. A signer can put down
+      // only their own name. A label that carries someone else's name cannot be changed, stripped or deleted,
+      // except by taking it over in the signer's own name, or by giving the claim support so it stops being a bet.
+      const where = changed.length === 1 ? (changed[0] as string) : 'trust labels';
+      for (const [id, label] of labelsNow) {
+        if (labelsBefore.length > 0 && labelsBefore.some((b) => b.get(id)?.trust === label.trust && b.get(id)?.by === label.by)) continue;
+        if (label.by !== undefined && label.by !== signer.name) {
+          check.problems.push(`${where}: the trust label on "${id}" is recorded as set by "${label.by}", but the commit was signed by ${signer.principal}`);
+        }
+      }
+      for (const [id, earlier] of labelsBefore[0] ?? []) {
+        if (earlier.by === undefined || earlier.by === signer.name) continue;
+        // Only what every parent agreed on, and this commit changed, is this commit's doing.
+        if (!labelsBefore.every((b) => b.get(id)?.trust === earlier.trust && b.get(id)?.by === earlier.by)) continue;
+        const label = labelsNow.get(id);
+        if (label?.trust === earlier.trust && label.by === earlier.by) continue;
+        if (label?.by === signer.name || label?.by === earlier.by || supportedNow.has(id)) continue;
+        check.problems.push(`${where}: the trust label on "${id}" carried ${earlier.by}'s name, and ${signer.principal} ${label ? 'changed it without putting their own name on it' : 'removed it'}`);
       }
       check.problems.push(...predictionProblems(hadPredictions, hasPredictions, signer, changed.length === 1 ? (changed[0] as string) : 'predictions', commitDay));
       for (const [key, now] of hasPredictions) {

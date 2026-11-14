@@ -78,6 +78,8 @@ const claims = (review: string): string => `claims:
     text: Output was 10 Mt in 2005.
     bet: assumed
 ${review}`;
+/** The fingerprint a review of that claim has to carry. */
+const FACT = claimRev({ text: 'Output was 10 Mt in 2005.', because: [] });
 
 const ann = makeKey();
 const bot = makeKey();
@@ -88,16 +90,22 @@ model-x@ai namespaces="git" ${bot.listed}
 ca@person cert-authority ${stranger.listed}
 `);
 
-before(() => {
+const roots: string[] = [];
+function newRepo(): void {
   root = mkdtempSync(join(tmpdir(), 'argmap-verify-'));
+  roots.push(root);
   run(['init', '-q', '-b', 'main']);
   // The merge tests ask git to merge, which needs a name to write down.
   run(['config', 'user.name', 'Tester']);
   run(['config', 'user.email', 'tester@example.com']);
   run(['config', 'commit.gpgsign', 'false']);
-});
+}
 
-after(() => rmSync(root, { recursive: true, force: true }));
+before(newRepo);
+
+after(() => {
+  for (const dir of roots) rmSync(dir, { recursive: true, force: true });
+});
 
 test('the list is read in the format git uses, and a certificate authority is not trusted by name', () => {
   assert.deepEqual(
@@ -116,16 +124,16 @@ test('the list is read in the format git uses, and a certificate authority is no
 test('commits are attributed by signature, and records must be in the signer\'s own name', () => {
   const ids = [
     commit({ 'claims/facts.yaml': claims('') }, 'add a fact', ann),
-    commit({ 'claims/facts.yaml': claims('    reviews:\n      - { by: ann, kind: person, verdict: confirm }\n') }, 'ann reviews', ann),
+    commit({ 'claims/facts.yaml': claims(`    reviews:\n      - { by: ann, kind: person, verdict: confirm, rev: ${FACT} }\n`) }, 'ann reviews', ann),
     commit(
-      { 'claims/facts.yaml': claims('    reviews:\n      - { by: ann, kind: person, verdict: confirm }\n      - { by: model-x, kind: ai, verdict: reject }\n') },
+      { 'claims/facts.yaml': claims(`    reviews:\n      - { by: ann, kind: person, verdict: confirm, rev: ${FACT} }\n      - { by: model-x, kind: ai, verdict: reject, rev: ${FACT} }\n`) },
       'the model reviews',
       bot,
     ),
     commit(
       {
         'claims/facts.yaml': claims(
-          '    reviews:\n      - { by: ann, kind: person, verdict: confirm }\n      - { by: model-x, kind: ai, verdict: reject }\n      - { by: ann, kind: person, verdict: reject, note: forged }\n',
+          `    reviews:\n      - { by: ann, kind: person, verdict: confirm, rev: ${FACT} }\n      - { by: model-x, kind: ai, verdict: reject, rev: ${FACT} }\n      - { by: ann, kind: person, verdict: reject, note: forged, rev: ${FACT} }\n`,
         ),
       },
       'the model writes a review as ann',
@@ -156,7 +164,7 @@ test('commits are attributed by signature, and records must be in the signer\'s 
 });
 
 test('a reviewer cannot pass as the other kind', () => {
-  commit({ 'claims/facts.yaml': claims('    reviews:\n      - { by: model-x, kind: person, verdict: confirm }\n') }, 'the model poses as a person', bot);
+  commit({ 'claims/facts.yaml': claims(`    reviews:\n      - { by: model-x, kind: person, verdict: confirm, rev: ${FACT} }\n`) }, 'the model poses as a person', bot);
   const last = verifyRange(root, 'HEAD~1..HEAD', signers)[0];
   assert.match(last?.problems[0] ?? '', /says its reviewer is a person, but model-x@ai is listed as an AI/);
 });
@@ -249,7 +257,7 @@ test('a merge whose sides conflict needs a trusted signature', () => {
 });
 
 test('an edited merge answers for the records it adds, and not for those its parents had', () => {
-  const review = (by: string, kind: string): string => `      - { by: ${by}, kind: ${kind}, verdict: confirm }\n`;
+  const review = (by: string, kind: string): string => `      - { by: ${by}, kind: ${kind}, verdict: confirm, rev: ${FACT} }\n`;
   const { base, a, b } = fork(
     { 'claims/merge-a.yaml': claims(`    reviews:\n${review('ann', 'person')}`).replace('fact:', 'fact-a:') },
     { 'claims/merge-b.yaml': claims(`    reviews:\n${review('model-x', 'ai')}`).replace('fact:', 'fact-b:') },
@@ -259,7 +267,7 @@ test('an edited merge answers for the records it adds, and not for those its par
   // The model merges, and writes a review as ann while doing it.
   writeFileSync(
     join(root, 'claims/merge-b.yaml'),
-    claims(`    reviews:\n${review('model-x', 'ai')}      - { by: ann, kind: person, verdict: reject, note: forged }\n`).replace('fact:', 'fact-b:'),
+    claims(`    reviews:\n${review('model-x', 'ai')}      - { by: ann, kind: person, verdict: reject, note: forged, rev: ${FACT} }\n`).replace('fact:', 'fact-b:'),
   );
   run(['add', '-A']);
   const forged = run(['write-tree']);
@@ -282,6 +290,12 @@ ${rest}`;
 /** Date the commits that follow. A date written in a record has to match the commit that records it. */
 const on = (day: string): void => {
   clock = Date.parse(`${day}T12:00:00Z`) / 1000;
+};
+/** A repository of its own for one test, with a first commit on the given day. Commits cannot be dated before their parents. */
+const startOn = (day: string): void => {
+  newRepo();
+  on(day);
+  commit({ 'README.md': 'start\n' }, 'start', ann);
 };
 
 const guess = (rest = '', p = 0.8): string => `    predictions:
@@ -307,6 +321,7 @@ const since = (from: string, options: { separate?: boolean } = {}): string[][] =
 const head = (): string => run(['rev-parse', 'HEAD']);
 
 test('a prediction, then its acceptance and outcome in later commits, each in the signer\'s name, pass', () => {
+  startOn('2026-11-14');
   const from = head();
   const file = 'claims/p1.yaml';
   on('2026-11-14');
@@ -325,6 +340,7 @@ test('a prediction, then its acceptance and outcome in later commits, each in th
 });
 
 test('a prediction cannot arrive with its outcome, be edited, or be removed', () => {
+  startOn('2026-11-14');
   const file = 'claims/p2.yaml';
   on('2026-11-14');
   commit({ [file]: licences('') }, 'ann makes a bet', ann);
@@ -343,6 +359,7 @@ test('a prediction cannot arrive with its outcome, be edited, or be removed', ()
 });
 
 test('an outcome is recorded once, and in the name of whoever signs', () => {
+  startOn('2026-11-14');
   const file = 'claims/p3.yaml';
   on('2026-11-14');
   commit({ [file]: licences('') }, 'ann makes a bet', ann);
@@ -357,6 +374,7 @@ test('an outcome is recorded once, and in the name of whoever signs', () => {
 });
 
 test('only someone who vouches for a claim can accept a test of it, and only before the outcome', () => {
+  startOn('2026-11-14');
   const file = 'claims/p4.yaml';
   on('2026-11-14');
   commit({ [file]: licences('') }, 'ann makes a bet', ann);
@@ -409,6 +427,7 @@ const three = parseSigners(`ann@person ${ann.listed}\nbob@person ${bob.listed}\n
 const sinceWith = (from: string): string[] => verifyRange(root, `${from}..HEAD`, three).flatMap((c) => c.problems);
 
 test('a test cannot be carried from one claim to another', () => {
+  startOn('2026-11-14');
   const file = 'claims/a1.yaml';
   on('2026-11-14');
   commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
@@ -425,6 +444,7 @@ test('a test cannot be carried from one claim to another', () => {
 });
 
 test('nobody can knock out a claim by vouching for a test somewhere else', () => {
+  startOn('2026-11-14');
   const file = 'claims/a2.yaml';
   on('2026-11-14');
   commit({ [file]: street('', '').replace('by: bob', 'by: ann') }, 'ann bets', ann);
@@ -445,6 +465,7 @@ test('nobody can knock out a claim by vouching for a test somewhere else', () =>
 });
 
 test('a prediction copied under another claim is a new prediction, and is refused with its outcome', () => {
+  startOn('2026-11-14');
   const file = 'claims/a3.yaml';
   on('2026-11-14');
   commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
@@ -462,6 +483,7 @@ test('a prediction copied under another claim is a new prediction, and is refuse
 });
 
 test('only its setter can withdraw a prediction', () => {
+  startOn('2026-11-14');
   const file = 'claims/a4.yaml';
   on('2026-11-14');
   commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
@@ -473,6 +495,7 @@ test('only its setter can withdraw a prediction', () => {
 });
 
 test('a signer can take back only what is in their own name', () => {
+  startOn('2026-11-14');
   const file = 'claims/a5.yaml';
   const bet = (rest: string): string => `claims:\n  shops:\n    text: ${SHOPS}\n    bet: assumed\n${rest}`;
   const bobs = `    evidence:\n      - { kind: account, stance: against, says: The bakery opened at ten., source: "https://example.org/x", by: bob }\n    reviews:\n      - { by: bob, kind: person, verdict: reject }\nlog:\n  - { at: 2026-11-14, by: bob, did: review, claim: shops }\n`;
@@ -492,6 +515,7 @@ test('a signer can take back only what is in their own name', () => {
 });
 
 test('a trust label that carries a name can only be changed by taking it over', () => {
+  startOn('2026-11-14');
   const file = 'claims/a6.yaml';
   const label = (bet: string): string => `claims:\n  shops:\n    text: ${SHOPS}\n    bet: ${bet}\n`;
   commit({ [file]: label('{ trust: assumed, by: ann }') }, 'ann sets assumed', ann);
@@ -507,6 +531,7 @@ test('a trust label that carries a name can only be changed by taking it over', 
 });
 
 test('the dates in a prediction have to match the commits that record them', () => {
+  startOn('2026-11-14');
   const file = 'claims/a7.yaml';
   on('2026-11-14');
   commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
@@ -521,6 +546,7 @@ test('the dates in a prediction have to match the commits that record them', () 
 });
 
 test('a claim cannot be reworded out from under an accepted test', () => {
+  startOn('2026-11-14');
   const file = 'claims/a9.yaml';
   on('2026-11-14');
   commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
@@ -528,4 +554,67 @@ test('a claim cannot be reworded out from under an accepted test', () => {
   const from = head();
   commit({ [file]: street(door({ rest: acceptedBy('ann') })).replace(SHOPS, 'Some shops on the street open before nine.') }, 'ann softens the claim while the test is open', ann);
   assert.ok(sinceWith(from).some((p) => /"shops" was reworded or rewired while an accepted test of it was waiting/.test(p)));
+});
+
+/* ---------- Second round of attacks ---------- */
+
+test('a commit cannot be dated before the one it builds on, or after now', () => {
+  startOn('2026-11-14');
+  const file = 'claims/b1.yaml';
+  commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
+  let from = head();
+  // A forecast "made" in 2024, in a commit dated 2024, on top of a commit from 2026.
+  on('2024-01-01');
+  commit({ [file]: street(door({ type: 'forecast', made: '2024-01-01', due: '2026-12-01', rest: '        accepted: [{ by: ann, kind: person, date: 2024-01-01 }]\n' }), '', 'ann') }, 'a forecast in a commit dated 2024', ann);
+  assert.ok(sinceWith(from).some((p) => /dated 2024-01-01, before the commit it builds on \(2026-11-14\)/.test(p)));
+
+  startOn('2026-11-14');
+  commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
+  commit({ [file]: street(door({ type: 'forecast', due: '2030-01-01', rest: acceptedBy('ann') }), '', 'ann') }, 'ann forecasts for 2030', ann);
+  from = head();
+  on('2030-01-03');
+  commit({ [file]: street(door({ type: 'forecast', due: '2030-01-01', rest: `${acceptedBy('ann')}        overdue: { by: bob, kind: person, date: 2030-01-03 }\n` }), '', 'ann') }, 'bob marks it overdue in a commit dated 2030', bob);
+  // The command line passes the present time. Here it is a day after the repository was started.
+  const now = Date.parse('2026-11-15T12:00:00Z') / 1000;
+  assert.match(verifyRange(root, `${from}..HEAD`, three, { notAfter: now })[0]?.problems[0] ?? '', /dated 2030-01-03, which has not happened yet/);
+});
+
+test('a label under another name cannot be removed by deleting the bet', () => {
+  startOn('2026-11-14');
+  const file = 'claims/b2.yaml';
+  const claim = (bet: string): string => `claims:\n  shops:\n    text: ${SHOPS}\n${bet}`;
+  commit({ [file]: claim('    bet: { trust: observed, by: ann }\n') }, 'ann labels it observed', ann);
+  let from = head();
+  commit({ [file]: claim('') }, 'bob deletes the bet', bob);
+  assert.match(sinceWith(from)[0] ?? '', /the trust label on "shops" carried ann's name, and bob@person removed it/);
+  // Giving the claim support is not stripping a label: it stops being a bet.
+  commit({ [file]: claim('    bet: { trust: observed, by: ann }\n') }, 'ann puts it back', ann);
+  from = head();
+  commit({ [file]: `${claim('    because: [bakery]\n')}  bakery:\n    text: The bakery opens at eight.\n    bet: { trust: assumed, by: bob }\n` }, 'bob puts a reason under it', bob);
+  assert.deepEqual(sinceWith(from), []);
+});
+
+test('someone who vouches for a claim accepts the tests they set on it', () => {
+  startOn('2026-11-14');
+  const file = 'claims/b3.yaml';
+  commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
+  const from = head();
+  commit({ [file]: street(door()) }, 'ann sets a test on her own bet and leaves her acceptance off', ann);
+  assert.ok(sinceWith(from).some((p) => /ann vouches for "shops" and set .* without accepting it/.test(p)));
+});
+
+test('a new review carries the full fingerprint of the claim it judged', () => {
+  startOn('2026-11-14');
+  const file = 'claims/b4.yaml';
+  const reviewed = (reviews: string): string => `claims:\n  shops:\n    text: ${SHOPS}\n    bet: assumed\n    reviews:\n${reviews}`;
+  commit({ [file]: `claims:\n  shops:\n    text: ${SHOPS}\n    bet: assumed\n` }, 'a bet', ann);
+  let from = head();
+  commit({ [file]: reviewed('      - { by: bob, kind: person, verdict: confirm, rev: "52dc34af" }\n') }, 'bob confirms with an 8-digit fingerprint', bob);
+  assert.match(sinceWith(from)[0] ?? '', /the review of "shops" by bob does not carry the fingerprint of the claim as it reads/);
+  from = head();
+  commit({ [file]: reviewed('      - { by: bob, kind: person, verdict: confirm }\n') }, 'bob confirms with none', bob);
+  assert.ok(sinceWith(from).some((p) => /the review of "shops" by bob carries no fingerprint/.test(p)));
+  from = head();
+  commit({ [file]: reviewed(`      - { by: bob, kind: person, verdict: confirm, rev: ${claimRev({ text: SHOPS, because: [] })} }\n`) }, 'bob confirms properly', bob);
+  assert.deepEqual(sinceWith(from), []);
 });

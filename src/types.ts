@@ -40,6 +40,12 @@ export interface Claim {
   reviews: Review[];
   /** What has been found for or against this claim. */
   evidence: Evidence[];
+  /**
+   * The definitions of the terms this claim pins, as one string. It is part of
+   * the claim's fingerprint, so redefining a word the claim turns on makes
+   * earlier reviews and tests stale, the same as rewording the claim.
+   */
+  pinned?: string;
   /** Tests of this claim: what was expected before looking, and what was found. */
   predictions: Prediction[];
   /** The file this claim was defined in: '' for the argument file, otherwise a library file name. */

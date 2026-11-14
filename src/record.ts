@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { relative, sep } from 'node:path';
-import { parseFile } from './parse.ts';
+import { parseFile, pinClaims } from './parse.ts';
 import { isCurrent, severity } from './predict.ts';
 import type { Prediction, ReviewerKind } from './types.ts';
 import { argumentFiles, libraryFiles } from './workspace.ts';
@@ -19,9 +19,13 @@ export interface Entry {
 /** Every prediction in the workspace: all argument files and the claims library. */
 export function allPredictions(root: string): Entry[] {
   const out: Entry[] = [];
-  for (const path of [...argumentFiles(root), ...libraryFiles(root)]) {
-    const file = relative(root, path).split(sep).join('/');
-    const raw = parseFile(readFileSync(path, 'utf8'), file);
+  const read = (path: string): ReturnType<typeof parseFile> => parseFile(readFileSync(path, 'utf8'), relative(root, path).split(sep).join('/'));
+  const library = libraryFiles(root).map(read);
+  // A claim's fingerprint takes in the definitions of the terms it pins, wherever they are defined.
+  const shared = new Map(library.flatMap((file) => [...file.terms]));
+  for (const raw of [...argumentFiles(root).map(read), ...library]) {
+    const file = raw.name;
+    pinClaims(raw.claims.values(), new Map([...shared, ...raw.terms]));
     for (const claim of raw.claims.values()) {
       claim.predictions.forEach((prediction, i) => out.push({ file, claim: claim.id, n: i + 1, prediction, current: isCurrent(claim, prediction) }));
     }

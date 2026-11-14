@@ -223,7 +223,8 @@ accepted test of it is waiting for its outcome.
 **Who vouches.** Whoever is named on the bet (`bet.by`, written when a trust
 label is set), and every reviewer whose confirmation of the present wording
 stands. Anyone may set a test. If the setter vouches for the claim, setting it
-is accepting it; otherwise it waits for a voucher to accept it.
+is accepting it, and `verify` refuses a voucher's test that leaves their own
+acceptance off; otherwise it waits for a voucher to accept it.
 
 **Overdue.** After the due date, anyone may add `overdue: { by, kind, date }`.
 If the test was accepted, the claim cannot stand until someone records the
@@ -242,7 +243,10 @@ and is shown on the claim when the test had been accepted.
 **Dates.** `made`, `due`, `resolved` and the date of an overdue marker are
 written as YYYY-MM-DD. `verify` checks each against the date of the commit
 that records it, give or take two days. A commit's date is set by whoever
-makes the commit, so this ties the dates together and does not prove them.
+makes the commit, so `verify` bounds it from both sides: a commit cannot be
+dated before the commit it builds on, or after the present. That stops a
+prediction being backdated and an overdue marker being filed early. It does
+not prove a date to the day.
 
 The engine reports:
 
@@ -270,10 +274,13 @@ Statuses are worked out from the files as they stand. `verify` is what makes
 the records in them worth trusting, so a status means what it says only on
 history that `verify` passes.
 
-The fingerprint is the first 32 hex digits of a SHA-256 of the claim's text
-and support. Before version 0.4 it was 8 digits of a weaker hash, for which a
+The fingerprint is the first 32 hex digits of a SHA-256 of the claim's text,
+its support, and the definitions of the terms it pins. Redefining a word a
+claim turns on therefore makes its earlier reviews and tests stale, the same
+as rewording it. Before version 0.4 it was 8 digits of a weaker hash, for which a
 second wording with the same value can be found in minutes. Reviews recorded
-with the short one are still read; nothing writes it any more.
+with the short one are still read; nothing writes it any more, and `verify`
+refuses a new review that carries the short one or none.
 
 ## Reviews
 

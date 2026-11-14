@@ -2,12 +2,13 @@ import { sha256Hex } from './sha256.ts';
 import type { Argument, Claim, Review } from './types.ts';
 
 /**
- * A fingerprint of what was judged or tested: the claim's wording and its
- * support. It is the first 32 hex digits of a SHA-256, long enough that nobody
+ * A fingerprint of what was judged or tested: the claim's wording, its
+ * support, and the definitions of the terms it pins. It is the first 32 hex digits of a SHA-256, long enough that nobody
  * can find a second wording with the same fingerprint.
  */
-export function claimRev(claim: Pick<Claim, 'text' | 'because'>): string {
-  return sha256Hex(`${claim.text}\u0000${JSON.stringify(claim.because)}`).slice(0, 32);
+export function claimRev(claim: Pick<Claim, 'text' | 'because' | 'pinned'>): string {
+  // The definitions of pinned terms count as part of the wording: a claim says something else once a word in it is redefined.
+  return sha256Hex(`${claim.text}\u0000${JSON.stringify(claim.because)}${claim.pinned ? `\u0000${claim.pinned}` : ''}`).slice(0, 32);
 }
 
 /**

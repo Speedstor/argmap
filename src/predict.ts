@@ -109,6 +109,7 @@ export interface ClaimRecord {
 
 export function claimRecord(claim: Claim): ClaimRecord {
   const rev = claimRev(claim);
+  const backers = new Set(vouchers(claim));
   const record: ClaimRecord = { open: 0, passed: 0, passedFromOthers: 0, passedNoRisk: 0, failed: 0, bitsOwn: 0, bitsOthers: 0, offered: 0, offeredAccepted: 0, withdrawn: 0, failedEarlier: 0 };
   for (const p of claim.predictions) {
     if (p.outcome === 'void' && p.accepted.length > 0) record.withdrawn++;
@@ -116,8 +117,9 @@ export function claimRecord(claim: Claim): ClaimRecord {
       if (p.outcome === 'no') record.failedEarlier++;
       continue;
     }
-    // Whether the setter was vouching is read off the acceptances, which are fixed, and not off who vouches today.
-    const own = p.accepted.some((a) => a.by === p.by);
+    // A test is the claim's own when its setter accepted it or vouches for the claim. verify makes a voucher
+    // accept their own test when they set it, so a voucher cannot pass an easy test off as someone else's.
+    const own = p.accepted.some((a) => a.by === p.by) || backers.has(p.by);
     if (!own) {
       record.offered++;
       if (p.accepted.length > 0) record.offeredAccepted++;

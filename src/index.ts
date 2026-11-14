@@ -7,7 +7,7 @@ import { termIssues } from './terms.ts';
 import type { Argument, Issue } from './types.ts';
 
 export * from './types.ts';
-export { parseArgument, parseFile, assemble, prettyLabel } from './parse.ts';
+export { parseArgument, parseFile, assemble, pinClaims, prettyLabel } from './parse.ts';
 export type { LibrarySource, RawFile } from './parse.ts';
 export { claimRev, legacyRev, reviewIsCurrent, reviewSummary, reviewSummaries } from './review.ts';
 export type { ReviewState, ReviewSummary } from './review.ts';

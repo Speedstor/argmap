@@ -331,3 +331,52 @@ test('the fingerprint tells apart two wordings that the old short one confused',
   assert.equal(reviewSummary(claim).state, 'confirmed');
   assert.equal(reviewSummary({ ...claim, text: 'Reworded.' }).state, 'unreviewed');
 });
+
+test('redefining a pinned term makes earlier tests and reviews stale', async () => {
+  const { reviewSummary } = await import('../src/index.ts');
+  const text = 'Every {shop} on the street opens before nine.';
+  const file = (definition: string, rev: string): string => `conclusion: a
+terms:
+  shop: ${definition}
+claims:
+  a:
+    text: ${text}
+    bet: { trust: observed, by: ann }
+    predictions:
+      - says: The bakery opens before nine.
+        how: Read the sign on the door.
+        type: lookup
+        p: 0.9
+        if_false: 0.3
+        by: ann
+        made: 2026-11-14
+        due: 2026-11-28
+        rev: ${rev}
+        accepted: [{ by: ann, kind: person, date: 2026-11-14 }]
+        outcome: yes
+        resolved: 2026-11-20
+        resolved_by: ann
+        source: https://example.org/door
+    reviews:
+      - { by: bob, kind: person, verdict: confirm, rev: ${rev} }
+`;
+  const narrow = read(file('A bakery.', 'x')).arg.claims.get('a') as NonNullable<ReturnType<Argument['claims']['get']>>;
+  const rev = claimRev(narrow);
+  // The definition is part of the fingerprint, so it differs from the fingerprint of the bare text.
+  assert.notEqual(rev, claimRev({ text, because: [] }));
+  const before = read(file('A bakery.', rev)).arg.claims.get('a') as typeof narrow;
+  assert.deepEqual([claimRecord(before).passed, reviewSummary(before).state], [1, 'confirmed']);
+  // Widen what "shop" means, and the same sentence is a different claim: the passed test and the confirmation no longer count.
+  const after = read(file('Any premises that sells anything, including bars and night markets.', rev)).arg.claims.get('a') as typeof narrow;
+  assert.deepEqual([claimRecord(after).passed, reviewSummary(after).state], [0, 'unreviewed']);
+});
+
+test('a test set by someone who vouches for the claim is the claim\'s own, whoever accepted it', () => {
+  // Two vouch for the claim: ann by the label, model-x by a standing confirmation. model-x sets a sure thing and ann accepts it.
+  const source = base(
+    `${test60(`${accepted}        outcome: yes\n        found: 60\n        resolved: 2026-11-20\n        resolved_by: model-x\n        resolved_kind: ai\n        source: https://example.org/s\n`, 'if_false: 0.01').replace('by: ann\n        made', 'by: model-x\n        kind: ai\n        made')}    reviews:\n      - { by: model-x, kind: ai, verdict: confirm, rev: ${REV} }\n`,
+  );
+  const record = claimRecord(read(source).arg.claims.get('licence-present') as NonNullable<ReturnType<Argument['claims']['get']>>);
+  assert.deepEqual([record.passed, record.passedFromOthers, record.bitsOthers, record.offered], [1, 0, 0, 0]);
+  assert.ok(record.bitsOwn > 6);
+});

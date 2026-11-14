@@ -98,6 +98,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The digest says whether the history passes verify, so it needs the whole history.
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 22

@@ -163,7 +163,8 @@ npm run argmap -- record     # what each name's predictions show
   the prediction has to be on `main` before its outcome is recorded.
 - **A test belongs to its claim.** It carries the claim's fingerprint, cannot
   be moved or copied to another claim, and the claim cannot be reworded while
-  an accepted test of it is waiting.
+  an accepted test of it is waiting. The fingerprint takes in the definitions
+  of the terms the claim pins, so redefining a word counts as rewording.
 - **A record per name, never pooled.** Lookups (the answer already existed) and
   forecasts are scored apart, forecasts by how long they ran, and only on ten
   or more resolved. Each part shows a Brier score, and the score if every open
@@ -179,7 +180,9 @@ npm run argmap -- record     # what each name's predictions show
 
 What this does not close. Someone can look first and predict afterwards; for a
 lookup nothing in a repository can prove otherwise. Dates are checked against
-commit dates, which the person committing sets. Anyone who can confirm a
+commit dates, which are bounded by the parent commit and the present but not
+proven. One accepted test with a far due date stops a claim being reworded
+until its setter withdraws it. Anyone who can confirm a
 claim, or put their own name on its trust label, can vouch for it, including
 someone who wants it to fail. A bet nobody vouches for cannot be knocked out by
 any test; the report counts those. How hard a test is rests on figures somebody
@@ -270,8 +273,14 @@ review, piece of evidence, log entry and prediction a commit adds is in the
 signer's own name and kind. A signer can take back only what is in their own
 name: removing someone else's review, evidence or log entry is refused, and so
 is changing a trust label that carries someone else's name without taking it
-over. It also keeps predictions in order: none arrives with its outcome, and
-none is edited, moved or removed afterwards.
+over. A new review must carry the fingerprint of the claim it judged. A commit
+cannot be dated before the one it builds on, or after the present. It also
+keeps predictions in order: none arrives with its outcome, and none is edited,
+moved or removed afterwards.
+
+Statuses are worked out from the files as they stand, so `verify` is an alarm
+and not a lock. The digest prints its result at the top: whether every commit
+behind it passes, and if not, which do not.
 
 CI runs it on every pull request with `--pull-request`, which also refuses a
 prediction and its outcome in the same pull request. The checker and the list
