@@ -45,8 +45,9 @@ Usage
                                     Start a notepad for the argument, or for one claim
   argmap idea   <file> "<text>" [--claim <id>] [--related] --by <name>
                                     Add a note to a notepad
-  argmap verify [<range>] [--signers <file>]
-                                    Check commits are signed by a listed key, in the signer's own name
+  argmap verify [<range>] [--signers <file>] [--pull-request]
+                                    Check commits are signed by a listed key, in the signer's own name.
+                                    --pull-request also refuses a prediction and its outcome in one range
   argmap use-key <private key file> Sign this clone's commits with that key (no ssh-keygen needed)
   argmap bundle <file>              Print the argument with its library claims inlined
   argmap view   <file> [-o out]     Write a self-contained HTML viewer
@@ -339,7 +340,8 @@ async function main(argv: string[]): Promise<number> {
         console.log('The list is empty, so no commit can be attributed to anyone. Add public keys to allowed_signers on main.');
         return 1;
       }
-      const checks = verifyRange(root, range, signers);
+      // In a pull request, a prediction and its outcome may not arrive together: the prediction has to be on main first.
+      const checks = verifyRange(root, range, signers, { separate: args.includes('--pull-request') });
       let bad = 0;
       for (const check of checks) {
         const fine = check.problems.length === 0;

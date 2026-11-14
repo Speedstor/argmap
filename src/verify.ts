@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { git, gitBuffer, refExists, tryGit } from './git.ts';
 import { parseFile } from './parse.ts';
 import type { RawFile } from './parse.ts';
+import { vouchers } from './predict.ts';
+import type { Prediction, Signed } from './types.ts';
 
 export const SIGNERS_FILE = 'allowed_signers';
 
@@ -197,6 +199,108 @@ function recordsOf(file: RawFile | undefined): { reviews: string[]; evidence: st
   return out;
 }
 
+/** A prediction as verify sees it: the part that may never change, and the parts that are added later. */
+interface Tracked {
+  /** Everything fixed when the prediction is made. Two predictions with the same key are the same prediction. */
+  key: string;
+  claim: string;
+  says: string;
+  by: string;
+  kind: string;
+  due: string;
+  accepted: Signed[];
+  overdue?: Signed;
+  /** The outcome and everything recorded with it, as one string. */
+  outcome?: string;
+  resolvedBy?: string;
+  resolvedKind?: string;
+  confirmed: Signed[];
+  /** Who vouched for the claim in this version of the file. */
+  vouchers: string[];
+}
+
+const fixedKey = (p: Prediction): string => JSON.stringify([p.says, p.how, p.type, p.p, p.ifTrue, p.ifFalse ?? null, p.sample ?? null, p.needs ?? null, p.by, p.kind, p.made, p.due, p.rev ?? null]);
+
+function track(file: RawFile | undefined, into: Map<string, Tracked>): void {
+  if (!file) return;
+  for (const claim of file.claims.values()) {
+    const backers = vouchers(claim);
+    for (const p of claim.predictions) {
+      const key = fixedKey(p);
+      const seen = into.get(key);
+      const one: Tracked = { key, claim: claim.id, says: p.says, by: p.by, kind: p.kind, due: p.due, accepted: [...p.accepted], confirmed: [...p.confirmed], vouchers: backers };
+      if (p.overdue) one.overdue = p.overdue;
+      if (p.outcome !== undefined) {
+        one.outcome = JSON.stringify([p.outcome, p.found ?? null, p.resolved ?? null, p.resolvedBy ?? null, p.resolvedKind ?? null, p.source ?? null, p.note ?? null]);
+        if (p.resolvedBy) one.resolvedBy = p.resolvedBy;
+        if (p.resolvedKind) one.resolvedKind = p.resolvedKind;
+      }
+      if (!seen) {
+        into.set(key, one);
+        continue;
+      }
+      // The same prediction seen on two sides of a merge: what either side added counts as already there.
+      for (const a of one.accepted) if (!seen.accepted.some((x) => x.by === a.by)) seen.accepted.push(a);
+      for (const c of one.confirmed) if (!seen.confirmed.some((x) => x.by === c.by)) seen.confirmed.push(c);
+      if (!seen.overdue && one.overdue) seen.overdue = one.overdue;
+      if (seen.outcome === undefined && one.outcome !== undefined) Object.assign(seen, { outcome: one.outcome, resolvedBy: one.resolvedBy, resolvedKind: one.resolvedKind });
+    }
+  }
+}
+
+const vouchedBy = (file: RawFile | undefined): Map<string, string> => {
+  const out = new Map<string, string>();
+  if (file) for (const claim of file.claims.values()) if (claim.bet?.by) out.set(claim.id, claim.bet.by);
+  return out;
+};
+
+/**
+ * The rules that make a prediction worth scoring. The guess must come first:
+ * a prediction arrives without its outcome, and is never edited or removed
+ * afterwards. Each later part (an acceptance, an overdue marker, the outcome, a
+ * second name on it) is added once, in the signer's own name.
+ */
+function predictionProblems(before: Map<string, Tracked>, after: Map<string, Tracked>, signer: Signer, path: string): string[] {
+  const problems: string[] = [];
+  const mine = (who: { by: string; kind: string }, what: string): void => {
+    if (who.by !== signer.name) problems.push(`${path}: ${what} is recorded as by "${who.by}", but the commit was signed by ${signer.principal}`);
+    else if (signer.kind !== 'unknown' && who.kind !== signer.kind) problems.push(`${path}: ${what} says it is by ${who.kind === 'ai' ? 'an AI' : 'a person'}, but ${signer.principal} is listed as ${signer.kind === 'ai' ? 'an AI' : 'a person'}`);
+  };
+  for (const [key, old] of before) {
+    if (!after.has(key)) problems.push(`${path}: a prediction on "${old.claim}" was changed or removed ("${old.says}"). Once recorded, a prediction's wording, chances and dates are fixed; to withdraw it, record the outcome void.`);
+  }
+  for (const [key, now] of after) {
+    const old = before.get(key);
+    const name = `the prediction on "${now.claim}" ("${now.says}")`;
+    if (!old) {
+      mine(now, name);
+      if (now.outcome !== undefined) problems.push(`${path}: ${name} arrived together with its outcome. The prediction must be recorded first, in an earlier commit.`);
+      if (now.overdue) problems.push(`${path}: ${name} arrived already marked overdue.`);
+      if (now.confirmed.length > 0) problems.push(`${path}: ${name} arrived with its outcome already confirmed.`);
+    }
+    const had = old ?? { accepted: [], confirmed: [] as Signed[], overdue: undefined, outcome: undefined };
+    for (const gone of had.accepted.filter((a) => !now.accepted.some((x) => x.by === a.by))) problems.push(`${path}: ${gone.by}'s acceptance of ${name} was removed.`);
+    for (const a of now.accepted.filter((x) => !had.accepted.some((y) => y.by === x.by))) {
+      mine(a, `an acceptance of ${name}`);
+      if (!now.vouchers.includes(a.by)) problems.push(`${path}: ${a.by} accepted ${name} without vouching for the claim. Only someone named on its trust label, or with a standing confirmation of it, can accept a test.`);
+      if (now.outcome !== undefined) problems.push(`${path}: ${name} was accepted when its outcome was already known. A test is accepted before the answer, or not at all.`);
+    }
+    if (had.overdue && JSON.stringify(had.overdue) !== JSON.stringify(now.overdue)) problems.push(`${path}: the overdue marker on ${name} was changed or removed.`);
+    if (!had.overdue && now.overdue) {
+      mine(now.overdue, `the overdue marker on ${name}`);
+      if (now.overdue.date !== undefined && now.overdue.date <= now.due) problems.push(`${path}: ${name} is marked overdue on ${now.overdue.date}, but it is due on ${now.due}.`);
+    }
+    if (had.outcome !== undefined && had.outcome !== now.outcome) problems.push(`${path}: the outcome of ${name} was changed or removed. An outcome is recorded once.`);
+    if (old && had.outcome === undefined && now.outcome !== undefined) mine({ by: now.resolvedBy ?? '', kind: now.resolvedKind ?? '' }, `the outcome of ${name}`);
+    for (const gone of had.confirmed.filter((c) => !now.confirmed.some((x) => x.by === c.by))) problems.push(`${path}: ${gone.by}'s confirmation of the outcome of ${name} was removed.`);
+    for (const c of now.confirmed.filter((x) => !had.confirmed.some((y) => y.by === x.by))) {
+      mine(c, `a confirmation of the outcome of ${name}`);
+      if (c.by === now.resolvedBy) problems.push(`${path}: ${c.by} recorded the outcome of ${name} and also confirmed it. A second name must be someone else.`);
+    }
+  }
+  return problems;
+}
+
 function added(before: string[], after: string[]): string[] {
   const pool = [...before];
   return after.filter((item) => {
@@ -217,10 +321,12 @@ function added(before: string[], after: string[]): string[] {
  * needs a trusted signature, and what it adds beyond its parents must be in the
  * signer's name.
  */
-export function verifyRange(root: string, range: string, signers: Signer[]): CommitCheck[] {
+export function verifyRange(root: string, range: string, signers: Signer[], options: { separate?: boolean } = {}): CommitCheck[] {
   const commits = git(root, ['rev-list', '--reverse', range]).split('\n').filter(Boolean);
   const byKey = new Map(signers.map((s) => [s.key, s]));
   const checks: CommitCheck[] = [];
+  /** Predictions first recorded inside this range, with the commit that brought each in. */
+  const born = new Map<string, string>();
   for (const commit of commits) {
     const check: CommitCheck = { commit, subject: git(root, ['log', '-1', '--format=%s', commit]), problems: [] };
     const parents = git(root, ['log', '-1', '--format=%P', commit]).split(' ').filter(Boolean);
@@ -255,11 +361,26 @@ export function verifyRange(root: string, range: string, signers: Signer[]): Com
             .filter((path) => /^(arguments|claims)\/.*\.ya?ml$/.test(path)),
         ),
       ];
+      // Predictions are followed across every file the commit touches, so moving a claim to another file does not look like deleting its tests.
+      const hadPredictions = new Map<string, Tracked>();
+      const hasPredictions = new Map<string, Tracked>();
       for (const path of changed) {
         const read = (rev: string): RawFile | undefined => {
           const text = tryGit(root, ['show', `${rev}:${path}`]);
           return text === undefined ? undefined : parseFile(text, path);
         };
+        const now = read(commit);
+        const named = new Map<string, string>();
+        for (const parent of parents) {
+          const was = read(parent);
+          track(was, hadPredictions);
+          for (const [id, who] of vouchedBy(was)) named.set(id, who);
+        }
+        track(now, hasPredictions);
+        // Naming who set a trust label makes that name vouch for the claim, so a signer can only put down their own.
+        for (const [id, who] of vouchedBy(now)) {
+          if (named.get(id) !== who && who !== signer.name) check.problems.push(`${path}: the trust label on "${id}" is recorded as set by "${who}", but the commit was signed by ${signer.principal}`);
+        }
         // What was already on record in any parent is not new, so a merge answers only for what it adds itself.
         const before = { reviews: [] as string[], evidence: [] as string[], log: [] as string[] };
         for (const parent of parents) {
@@ -283,6 +404,15 @@ export function verifyRange(root: string, range: string, signers: Signer[]): Com
         for (const item of added(before.log, after.log)) {
           const [by] = JSON.parse(item) as [string];
           if (by !== signer.name) check.problems.push(`${path}: a log entry is recorded as by "${by}", but the commit was signed by ${signer.principal}`);
+        }
+      }
+      check.problems.push(...predictionProblems(hadPredictions, hasPredictions, signer, changed.length === 1 ? (changed[0] as string) : 'predictions'));
+      for (const [key, now] of hasPredictions) {
+        if (!hadPredictions.has(key)) born.set(key, commit);
+        else if (options.separate && now.outcome !== undefined && hadPredictions.get(key)?.outcome === undefined && born.has(key)) {
+          check.problems.push(
+            `the outcome of the prediction on "${now.claim}" ("${now.says}") is in the same set of commits as the prediction itself (${(born.get(key) as string).slice(0, 7)}). The prediction must be merged first, and its outcome recorded afterwards.`,
+          );
         }
       }
     }

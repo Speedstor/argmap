@@ -1,7 +1,8 @@
 # Test every change, and keep a digest of the repository on the digest branch.
 #
-# On a pull request into main: type-check, run the tests, and build the digest
-# to prove it still builds. Nothing is published.
+# On a pull request into main: type-check, run the tests, build the digest to
+# prove it still builds, and run "argmap verify" on the commits the pull request
+# adds. Nothing is published.
 #
 # On a push to main, or when run by hand: the same, then write the digest to the
 # digest branch. That branch holds generated Markdown only: one commit, replaced
@@ -29,6 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # verify redoes merges and reads allowed_signers from main, so it needs the whole history.
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -38,6 +42,12 @@ jobs:
       - run: npm test
       - name: Build the digest
         run: node bin/argmap.mjs digest -o _digest
+      # Every commit the pull request adds must be signed by a listed key, in the
+      # signer's own name. A prediction and its outcome may not arrive in the same
+      # pull request: the prediction has to be on main before anyone looks.
+      - name: Check signatures and that each guess came first
+        if: github.event_name == 'pull_request'
+        run: node bin/argmap.mjs verify "origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }}" --pull-request
 
   digest:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

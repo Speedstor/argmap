@@ -179,3 +179,48 @@ export function predictionIssues(arg: Argument): Issue[] {
   }
   return issues;
 }
+
+/** How far the bets have been put to a test: of the bets, how many have a test of their present wording, and how those stand. */
+export interface Testability {
+  bets: number;
+  tested: number;
+  open: number;
+  passed: number;
+  failed: number;
+}
+
+export function testability(arg: Argument): Testability {
+  const out: Testability = { bets: 0, tested: 0, open: 0, passed: 0, failed: 0 };
+  for (const claim of arg.claims.values()) {
+    const rev = claimRev(claim);
+    const current = claim.predictions.filter((p) => isCurrent(claim, p, rev));
+    if (claim.bet) {
+      out.bets++;
+      if (current.length > 0) out.tested++;
+    }
+    for (const p of current) {
+      if (p.outcome === undefined) out.open++;
+      else if (p.outcome === 'yes') out.passed++;
+      else if (p.outcome === 'no') out.failed++;
+    }
+  }
+  return out;
+}
+
+/** One line on a test, for a report or a digest. */
+export function describeTest(claim: Claim, p: Prediction, n: number): string {
+  const state = p.outcome === 'yes' ? 'passed' : p.outcome === 'no' ? (knocks(claim, p) ? 'failed, and knocked the claim out' : 'failed, counted as evidence against') : p.outcome === 'void' ? 'withdrawn' : blocks(claim, p) ? 'overdue, holding the claim back' : p.overdue ? 'overdue' : 'open';
+  const bits = severity(p);
+  const parts = [
+    `test ${n}, ${p.type}, ${state}${isCurrent(claim, p) ? '' : ' (on an earlier wording)'}: ${p.says}`,
+    `set by ${p.by} (${p.kind}) on ${p.made} at ${Math.round(p.p * 100)}%`,
+    bits === undefined ? 'hardness not given' : `hardness ${bits.toFixed(1)} bits (if true ${p.ifTrue}, if false ${p.ifFalse})`,
+    p.sample !== undefined ? `sample ${p.sample}, needs ${p.needs}${p.found !== undefined ? `, found ${p.found}` : ''}` : '',
+    p.accepted.length > 0 ? `accepted by ${p.accepted.map((a) => a.by).join(', ')}` : 'accepted by nobody who vouches for the claim',
+    p.outcome === undefined ? `due ${p.due}` : `recorded by ${p.resolvedBy}${p.resolved ? ` on ${p.resolved}` : ''}`,
+    p.confirmed.length > 0 ? `confirmed by ${p.confirmed.map((c) => c.by).join(', ')}` : '',
+    p.source ? `source: ${p.source}` : '',
+    p.note ? `note: ${p.note}` : '',
+  ];
+  return parts.filter((x) => x !== '').join(' | ');
+}

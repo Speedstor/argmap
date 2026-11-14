@@ -266,3 +266,97 @@ test('an edited merge answers for the records it adds, and not for those its par
   assert.equal(check?.problems.length, 1);
   assert.match(check?.problems[0] ?? '', /a review of "fact-b" is recorded as by "ann", but the commit was signed by model-x@ai/);
 });
+
+/* ---------- Predictions: the guess must come first ---------- */
+
+const licences = (rest: string, vouchedBy = 'ann'): string => `claims:
+  licences:
+    text: At least 9 in 10 public repositories with over 1,000 stars carry a licence file.
+    bet: { trust: assumed, by: ${vouchedBy} }
+${rest}`;
+
+const guess = (rest = '', p = 0.8): string => `    predictions:
+      - says: Of 60 such repositories drawn at random, at least 51 have a licence file.
+        how: A repository counts when a LICENSE or COPYING file is at its top level.
+        type: lookup
+        p: ${p}
+        if_false: 0.2
+        sample: 60
+        needs: 51
+        by: ann
+        made: 2026-11-14
+        due: 2026-11-28
+${rest}`;
+
+const annAccepts = '        accepted: [{ by: ann, kind: person, date: 2026-11-14 }]\n';
+const outcomeBy = (by: string, kind: string, found = 47): string =>
+  `        outcome: ${found >= 51 ? 'yes' : 'no'}\n        found: ${found}\n        resolved: 2026-11-20\n        resolved_by: ${by}\n        resolved_kind: ${kind}\n        source: https://example.org/sample-of-60.csv\n`;
+
+/** Problems of every commit after `from`, oldest first. */
+const since = (from: string, options: { separate?: boolean } = {}): string[][] => verifyRange(root, `${from}..HEAD`, signers, options).map((c) => c.problems);
+const head = (): string => run(['rev-parse', 'HEAD']);
+
+test('a prediction, then its acceptance and outcome in later commits, each in the signer\'s name, pass', () => {
+  const from = head();
+  const file = 'claims/p1.yaml';
+  commit({ [file]: licences('') }, 'ann makes a bet', ann);
+  commit({ [file]: licences(guess(annAccepts)) }, 'ann predicts', ann);
+  commit({ [file]: licences(guess(annAccepts + outcomeBy('model-x', 'ai'))) }, 'the model records what it found', bot);
+  commit({ [file]: licences(guess(`${annAccepts + outcomeBy('model-x', 'ai')}        confirmed: [{ by: ann, kind: person, date: 2026-11-21 }]\n`)) }, 'ann confirms the outcome', ann);
+  assert.deepEqual(since(from), [[], [], [], []]);
+  // In a pull request the prediction must already be merged, so the same four commits in one range do not pass.
+  const strict = since(from, { separate: true });
+  assert.match(strict[2]?.[0] ?? '', /is in the same set of commits as the prediction itself/);
+  assert.deepEqual([strict[0], strict[1], strict[3]], [[], [], []]);
+  // With the prediction already behind the range, the outcome passes.
+  assert.deepEqual(verifyRange(root, 'HEAD~2..HEAD', signers, { separate: true }).map((c) => c.problems), [[], []]);
+});
+
+test('a prediction cannot arrive with its outcome, be edited, or be removed', () => {
+  const file = 'claims/p2.yaml';
+  commit({ [file]: licences('') }, 'ann makes a bet', ann);
+  let from = head();
+  commit({ [file]: licences(guess(annAccepts + outcomeBy('ann', 'person', 55))) }, 'a prediction made after looking', ann);
+  assert.match(since(from)[0]?.[0] ?? '', /arrived together with its outcome/);
+
+  commit({ [file]: licences(guess(annAccepts)) }, 'ann predicts 80%', ann);
+  from = head();
+  commit({ [file]: licences(guess(annAccepts, 0.95)) }, 'ann raises it to 95%', ann);
+  assert.match(since(from)[0]?.[0] ?? '', /was changed or removed .*wording, chances and dates are fixed/);
+
+  from = head();
+  commit({ [file]: licences('') }, 'ann deletes the prediction', ann);
+  assert.match(since(from)[0]?.[0] ?? '', /was changed or removed/);
+});
+
+test('an outcome is recorded once, and in the name of whoever signs', () => {
+  const file = 'claims/p3.yaml';
+  commit({ [file]: licences('') }, 'ann makes a bet', ann);
+  commit({ [file]: licences(guess(annAccepts)) }, 'ann predicts', ann);
+  let from = head();
+  commit({ [file]: licences(guess(annAccepts + outcomeBy('ann', 'person'))) }, 'the model records an outcome as ann', bot);
+  assert.match(since(from)[0]?.[0] ?? '', /the outcome of the prediction .* is recorded as by "ann", but the commit was signed by model-x@ai/);
+  from = head();
+  commit({ [file]: licences(guess(annAccepts + outcomeBy('ann', 'person', 55))) }, 'the outcome turns into a yes', ann);
+  assert.match(since(from)[0]?.[0] ?? '', /the outcome of .* was changed or removed. An outcome is recorded once/);
+});
+
+test('only someone who vouches for a claim can accept a test of it, and only before the outcome', () => {
+  const file = 'claims/p4.yaml';
+  commit({ [file]: licences('') }, 'ann makes a bet', ann);
+  commit({ [file]: licences(guess()) }, 'ann predicts', ann);
+  let from = head();
+  commit({ [file]: licences(guess('        accepted: [{ by: model-x, kind: ai }]\n')) }, 'the model accepts a test of a claim it does not vouch for', bot);
+  assert.match(since(from)[0]?.[0] ?? '', /model-x accepted .* without vouching for the claim/);
+
+  // Putting someone else's name on the trust label would make them vouch for it.
+  from = head();
+  commit({ 'claims/p5.yaml': licences('') }, 'the model names ann on a bet', bot);
+  assert.match(since(from)[0]?.[0] ?? '', /the trust label on "licences" is recorded as set by "ann", but the commit was signed by model-x@ai/);
+
+  commit({ 'claims/p6.yaml': licences(guess()) }, 'ann bets and predicts', ann);
+  commit({ 'claims/p6.yaml': licences(guess(outcomeBy('model-x', 'ai'))) }, 'the model records a failure', bot);
+  from = head();
+  commit({ 'claims/p6.yaml': licences(guess(annAccepts + outcomeBy('model-x', 'ai'))) }, 'ann accepts after the fact', ann);
+  assert.match(since(from)[0]?.[0] ?? '', /was accepted when its outcome was already known/);
+});

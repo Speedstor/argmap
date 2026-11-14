@@ -34,6 +34,8 @@ npm run argmap -- next   arguments/second-industrialization.yaml
 npm run argmap -- knock  arguments/second-industrialization.yaml same-inputs
 npm run argmap -- search coal
 npm run argmap -- review arguments/second-industrialization.yaml same-inputs reject --by you --note "why"
+npm run argmap -- due        # open predictions (see "Predictions" below)
+npm run argmap -- record     # what each name's predictions show
 npm run argmap -- view   arguments/second-industrialization.yaml -o dist/map.html
 npm run argmap -- init   arguments/my-argument.yaml
 npm test
@@ -126,6 +128,57 @@ no figure, date, place or case, or bundles several claims into one sentence.
 These are word-level prompts. They point at where to look; a person or a model
 decides what the sharper claim is.
 
+## Predictions: let the world grade it
+
+argmap cannot tell you what is true. It can make being wrong quick to notice
+and hard to hide. The rule is: **predict before you check.**
+
+Most bets never resolve by themselves, but checking one does. Before you open a
+source, write down what you expect to find and how sure you are. Then look,
+and record what you found.
+
+```sh
+npm run argmap -- predict arguments/reuse.yaml licence-present \
+    --says "Of 60 such repositories drawn at random, at least 51 have a licence file." \
+    --how "A repository counts when a LICENSE or COPYING file is at its top level." \
+    --type lookup --p 0.8 --if-true 0.97 --if-false 0.15 --sample 60 --needs 51 \
+    --due 2026-11-28 --by ann
+npm run argmap -- resolve arguments/reuse.yaml licence-present 1 --found 47 \
+    --source https://example.org/sample-of-60.csv --by model-x --ai
+npm run argmap -- due        # open predictions, most overdue first
+npm run argmap -- record     # what each name's predictions show
+```
+
+- **A failed test knocks the claim out**, the way a failing test breaks a
+  build, when the claim was taken to imply the test and someone who vouches for
+  the claim accepted it beforehand. Reword the claim to what was found and it
+  stands again; the failure stays on its record. A passed test changes no
+  status.
+- **Three chances, three jobs.** `--p` is your own chance of a yes and scores
+  you. `--if-true` and `--if-false` say how likely a yes is with the claim true
+  and with it false, which is how hard the test is. A test the claim would pass
+  either way is flagged as soft.
+- **The guess must come first.** `verify` refuses a prediction that arrives
+  with its outcome, or that is edited or removed afterwards. In a pull request
+  the prediction has to be on `main` before its outcome is recorded.
+- **A record per name, never pooled.** Lookups (the answer already existed) and
+  forecasts are scored apart, forecasts by how long they ran, and only on ten
+  or more resolved. Each part shows a Brier score, skill against your own usual
+  answer (so a diet of safe predictions scores near zero), and the score if
+  every open prediction went against you.
+- **A record per claim.** How many tests it has survived and how hard they
+  were, how many were set by someone who rejects it, and how many failed under
+  an earlier wording.
+- **Trust labels stay typed.** A record sits beside a label and never sets it.
+- **Reminders.** `.github/workflows/due.yml` opens an issue each day for every
+  prediction that has come due, so nobody has to remember to look.
+
+What this does not close. Someone can look first and predict afterwards; for a
+lookup nothing in a repository can prove otherwise. Anyone who can confirm a
+claim can vouch for it, including someone who wants it to fail. And a
+prediction says nothing about a bet that cannot be scored at all. The format
+is described in [docs/format.md](docs/format.md).
+
 ## The claims database
 
 Claims that more than one argument can use live in `claims/`, as files in the
@@ -206,8 +259,11 @@ npm run argmap -- verify HEAD~5..HEAD
 ```
 
 `verify` checks that every commit is signed by a listed key, and that each
-review, piece of evidence and log entry a commit adds is in the signer's own
-name and kind. Nobody can record a judgment as someone else, and an AI cannot
+review, piece of evidence, log entry and prediction a commit adds is in the
+signer's own name and kind. It also keeps predictions in order: none arrives
+with its outcome, and none is edited or removed afterwards. CI runs it on
+every pull request with `--pull-request`, which also refuses a prediction and
+its outcome in the same pull request. Nobody can record a judgment as someone else, and an AI cannot
 record one as a person. A signature shows which key signed; for an AI that
 means the agent its operator gave the key to, not which model wrote the text.
 Signatures are checked with the public key alone, in the tool itself, so no
@@ -268,6 +324,9 @@ client can read, search, sharpen and review arguments. Point a client at it:
 | `reword_claim`, `set_bet` | Sharpen wording; record the result of a check |
 | `add_evidence` | Attach a statistic, account, paper or reference, for or against |
 | `add_review` | Record a confirm or reject from a person or an AI |
+| `predict`, `accept_test`, `resolve_prediction` | Record what you expect before checking, accept a test on a claim you vouch for, record what was found |
+| `mark_overdue`, `confirm_outcome` | Mark a test that is past due; put a second name to an outcome |
+| `due_predictions`, `prediction_record` | Open predictions by date; what each name's predictions show |
 | `read_ideas`, `create_notepad`, `add_idea` | Read and write notepads on the ideas branch |
 
 Every write is checked before it is saved: a change that would leave the
@@ -294,10 +353,12 @@ These follow from the bets as written. None of them means "true".
 | `src/` | The engine: parsing, checks, evaluation, analysis, lint, reviews. Deterministic, no AI |
 | `src/edit.ts`, `src/mcp.ts` | Safe edits to the files, and the MCP server built on them |
 | `src/ideas.ts`, `src/verify.ts`, `src/sign.ts` | Notepads on the ideas branch; checking and making signatures |
+| `src/predict.ts`, `src/record.ts` | Predictions: what a test does to a claim, and what each name's predictions show |
 | `allowed_signers` | The public list of trusted keys |
 | `viewer/` | The interactive page, bundled by `scripts/build.mjs` |
 | `src/digest.ts` | The repository written out as Markdown, to read in one pass |
-| `.github/workflows/ci.yml` | Tests on every change; writes the digest to the `digest` branch from `main` |
+| `.github/workflows/ci.yml` | Tests and `verify` on every pull request; writes the digest to the `digest` branch from `main` |
+| `.github/workflows/due.yml`, `scripts/due-issues.mjs` | Opens an issue each day for every prediction that has come due |
 | `scripts/update-from-upstream.sh`, `.github/workflows/update-from-upstream.yml` | Bring a private copy up to date with this repository |
 | `test/` | Engine, MCP server, digest and update tests |
 

@@ -2,6 +2,7 @@ import { analyze, knockOut } from './analyze.ts';
 import { reason } from './evaluate.ts';
 import { resolution } from './lint.ts';
 import { nextSteps } from './next.ts';
+import { claimRecord, testability, vouchers } from './predict.ts';
 import type { Step } from './next.ts';
 import { reviewSummaries } from './review.ts';
 import { plainText } from './terms.ts';
@@ -100,6 +101,8 @@ export function formatReport(loaded: Loaded, knocked: ReadonlySet<string> = new 
   out.push(
     `Evidence: ${withEvidence.reduce((n, c) => n + c.evidence.length, 0)} records on ${withEvidence.length} claims. ${unbacked} trust label${unbacked === 1 ? ' is' : 's are'} not backed by the evidence attached.`,
   );
+  const tests = testability(arg);
+  out.push(`Tests: ${tests.tested} of ${tests.bets} bets have a test of their present wording. ${tests.passed} passed, ${tests.failed} failed, ${tests.open} open.`);
   out.push(
     `Reviews: ${count('confirmed')} confirmed, ${count('rejected')} rejected, ${count('split')} split, ${count('unreviewed')} unreviewed.`,
     '',
@@ -183,6 +186,8 @@ export function toJson(loaded: Loaded, knocked: ReadonlySet<string> = new Set())
       bet: c.bet,
       origin: c.origin === '' ? 'argument' : c.origin,
       evidence: c.evidence,
+      predictions: c.predictions,
+      ...(c.predictions.length > 0 ? { tests: claimRecord(c), vouchers: vouchers(c) } : {}),
       review: reviews.get(c.id)?.state,
       reviews: c.reviews,
       reason: reason(arg, a.statuses, knocked, c.id),
@@ -190,6 +195,7 @@ export function toJson(loaded: Loaded, knocked: ReadonlySet<string> = new Set())
     bets: a.bets,
     cruxes: a.cruxes,
     resolution: { bets: res.bets, sharp: res.sharp, flags: Object.fromEntries(res.flags) },
+    tests: testability(arg),
     nextSteps: nextSteps(arg, a),
     log: arg.log,
     issues: loaded.issues,

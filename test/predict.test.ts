@@ -1,0 +1,269 @@
+import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { Editor, EditError } from '../src/edit.ts';
+import { analyze, claimRecord, impliedCredence, load, nextSteps, severity } from '../src/index.ts';
+import type { Argument, Prediction } from '../src/index.ts';
+import { allPredictions, bucketOf, dueOn, records } from '../src/record.ts';
+
+// An invented question: can a small team reuse popular open-source code without asking each author?
+const base = (licencePresent: string, extra = ''): string => `conclusion: reuse
+claims:
+  reuse:
+    text: A small team can reuse code from popular public repositories without asking each author.
+    because: [licence-present, licence-permits]
+  licence-present:
+${licencePresent}
+  licence-permits:
+    text: The licence found on 8 in 10 such repositories allows reuse in closed products.
+    bet: assumed
+${extra}`;
+
+const test60 = (rest: string, head = 'if_true: 0.97\n        if_false: 0.15'): string => `    text: At least 9 in 10 public repositories with over 1,000 stars carry a licence file.
+    bet: { trust: assumed, by: ann }
+    predictions:
+      - says: Of 60 such repositories drawn at random, at least 51 have a licence file.
+        how: A repository counts when a LICENSE or COPYING file is at its top level.
+        type: lookup
+        p: 0.8
+        ${head}
+        sample: 60
+        needs: 51
+        by: ann
+        made: 2026-11-14
+        due: 2026-11-28
+${rest}`;
+
+const failed = `        outcome: no
+        found: 47
+        resolved: 2026-11-20
+        resolved_by: model-x
+        resolved_kind: ai
+        source: https://example.org/sample-of-60.csv
+`;
+const accepted = `        accepted: [{ by: ann, kind: person, date: 2026-11-14 }]
+`;
+
+function read(source: string): { arg: Argument; codes: string[]; messages: string[] } {
+  const loaded = load(source);
+  const errors = loaded.issues.filter((i) => i.severity === 'error').map((i) => i.message);
+  assert.deepEqual(errors, []);
+  return { arg: loaded.argument as Argument, codes: loaded.issues.map((i) => i.code), messages: loaded.issues.map((i) => i.message) };
+}
+const errorsOf = (source: string): string[] =>
+  load(source)
+    .issues.filter((i) => i.severity === 'error')
+    .map((i) => i.message);
+
+test('an open test changes nothing', () => {
+  const { arg } = read(base(test60(accepted)));
+  assert.equal(analyze(arg).conclusion, 'stands');
+});
+
+test('a failed test knocks the claim out when it was vouched to pass it', () => {
+  const { arg, codes } = read(base(test60(accepted + failed)));
+  const a = analyze(arg);
+  assert.equal(a.statuses.get('licence-present'), 'falls');
+  assert.equal(a.conclusion, 'falls');
+  assert.ok(codes.includes('test-failed'));
+  const step = nextSteps(arg, a)[0];
+  assert.equal(`${step?.kind} ${step?.claims[0]}`, 'answer licence-present');
+  assert.match(step?.why ?? '', /47 of 60, with 51 needed/);
+});
+
+test('a failed test nobody vouching for the claim accepted is evidence against, and knocks nothing out', () => {
+  const { arg, codes } = read(base(test60(failed)));
+  assert.equal(analyze(arg).conclusion, 'stands');
+  assert.ok(codes.includes('test-against'));
+  assert.ok(!codes.includes('test-failed'));
+});
+
+test('a failed test the claim did not imply is evidence against', () => {
+  const { arg, messages } = read(base(test60(accepted + failed, 'if_true: 0.8\n        if_false: 0.15')));
+  assert.equal(analyze(arg).conclusion, 'stands');
+  assert.ok(messages.some((m) => /not taken to imply it \(if_true is 0.8\)/.test(m)));
+});
+
+test('rewording a claim clears the knock-out, and the failure stays on its record', () => {
+  const source = base(test60(`        rev: 00000000\n${accepted}${failed}`));
+  const { arg } = read(source);
+  assert.equal(analyze(arg).conclusion, 'stands');
+  const record = claimRecord(arg.claims.get('licence-present') as NonNullable<ReturnType<Argument['claims']['get']>>);
+  assert.equal(record.failedEarlier, 1);
+  assert.equal(record.failed, 0);
+});
+
+test('an accepted test marked overdue holds the claim back until it is resolved', () => {
+  const overdue = '        overdue: { by: model-x, kind: ai, date: 2026-12-05 }\n';
+  const held = read(base(test60(accepted + overdue)));
+  const a = analyze(held.arg);
+  assert.equal(a.statuses.get('licence-present'), 'contested');
+  assert.equal(a.conclusion, 'contested');
+  assert.ok(held.codes.includes('test-overdue'));
+  assert.equal(nextSteps(held.arg, a)[0]?.kind, 'resolve');
+  // A marker on a test nobody accepted holds nothing back: otherwise anyone could stall a claim.
+  assert.equal(analyze(read(base(test60(overdue))).arg).conclusion, 'stands');
+});
+
+test('a passed test changes no status and adds to what the claim has survived', () => {
+  const passed = `        outcome: yes\n        found: 55\n        resolved_by: model-x\n        resolved_kind: ai\n        source: https://example.org/sample-of-60.csv\n`;
+  const { arg } = read(base(test60(accepted + passed)));
+  assert.equal(analyze(arg).conclusion, 'stands');
+  const record = claimRecord(arg.claims.get('licence-present') as NonNullable<ReturnType<Argument['claims']['get']>>);
+  assert.equal(record.passed, 1);
+  assert.ok(Math.abs(record.bitsSurvived - Math.log2(0.97 / 0.15)) < 1e-9);
+});
+
+test('the outcome of a sampled test follows from the count', () => {
+  assert.match(errorsOf(base(test60(failed.replace('outcome: no', 'outcome: yes'))))[0] ?? '', /found 47 of 60 with 51 needed makes the outcome no, not yes/);
+  assert.match(errorsOf(base(test60(failed.replace('        found: 47\n', ''))))[0] ?? '', /needs "found"/);
+  assert.match(errorsOf(base(test60(failed.replace(/        source: .*\n/, ''))))[0] ?? '', /needs a "source"/);
+  assert.match(errorsOf(base(test60('').replace('p: 0.8', 'p: 1.2')))[0] ?? '', /above 0 and below 1/);
+  assert.match(errorsOf(base(test60('').replace('needs: 51', 'needs: 61')))[0] ?? '', /needs between 1 and sample/);
+});
+
+test('hardness comes from if_true and if_false, and the setter\'s own number is left out of it', () => {
+  const p = { p: 0.8, ifTrue: 1, ifFalse: 0.25 } as Prediction;
+  assert.equal(severity(p), 2);
+  assert.equal(severity({ ...p, p: 0.3 } as Prediction), 2);
+  assert.ok(Math.abs((impliedCredence(p) as number) - 0.55 / 0.75) < 1e-9);
+  assert.equal(impliedCredence({ p: 0.9, ifTrue: 0.8, ifFalse: 0.2 } as Prediction), undefined);
+});
+
+test('soft, inconsistent and one-case tests are flagged', () => {
+  const soft = read(base(test60(accepted, 'if_true: 0.9\n        if_false: 0.6')));
+  assert.ok(soft.codes.includes('test-soft'));
+  const silent = read(base(test60(accepted).replace('        if_true: 0.97\n        if_false: 0.15\n', '')));
+  assert.ok(silent.messages.some((m) => /does not say how likely a yes would be if the claim were false/.test(m)));
+  const odd = read(base(test60(accepted, 'if_true: 0.7\n        if_false: 0.15')));
+  assert.ok(odd.codes.includes('test-inconsistent'));
+  const doubt = read(base(test60(accepted, 'if_true: 0.97\n        if_false: 0.7').replace('trust: assumed', 'trust: corroborated')));
+  assert.ok(doubt.messages.some((m) => /imply a belief of about 37%/.test(m)));
+  const one = read(`conclusion: c
+claims:
+  c:
+    text: Buses on the number 9 route usually arrive within five minutes of the timetable.
+    bet: { trust: assumed, by: ann }
+    predictions:
+      - says: The 08:10 bus on 2 December arrives by 08:15.
+        how: Read the arrival time from the operator's live board.
+        type: forecast
+        p: 0.7
+        if_false: 0.3
+        by: ann
+        made: 2026-11-14
+        due: 2026-12-02
+        accepted: [{ by: ann }]
+`);
+  assert.ok(one.codes.includes('test-one-case'));
+});
+
+test('a test set by someone who does not vouch for the claim waits to be accepted', () => {
+  const { arg, messages } = read(base(test60('').replace('by: ann\n        made', 'by: model-x\n        kind: ai\n        made')));
+  assert.ok(messages.some((m) => /is waiting for ann to accept it/.test(m)));
+  const step = nextSteps(arg, analyze(arg)).find((s) => s.claims[0] === 'licence-present');
+  assert.equal(step?.kind, 'accept');
+  const record = claimRecord(arg.claims.get('licence-present') as NonNullable<ReturnType<Argument['claims']['get']>>);
+  assert.deepEqual([record.offered, record.offeredAccepted], [1, 0]);
+});
+
+test('the editor records a test, its acceptance and its outcome, each once', () => {
+  const root = mkdtempSync(join(tmpdir(), 'argmap-predict-'));
+  try {
+    mkdirSync(join(root, 'arguments'));
+    mkdirSync(join(root, 'claims'));
+    const path = join(root, 'arguments', 'reuse.yaml');
+    writeFileSync(
+      path,
+      `argmap: 1\ntitle: Reuse\n${base('    text: At least 9 in 10 public repositories with over 1,000 stars carry a licence file.\n    bet: { trust: assumed, by: ann }')}`,
+    );
+    const due = new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10);
+    const make = { says: 'Of 60 such repositories drawn at random, at least 51 have a licence file.', how: 'Top-level LICENSE or COPYING file.', type: 'lookup' as const, p: 0.8, ifFalse: 0.15, sample: 60, needs: 51, due };
+    // Ann vouches for the bet, so setting a test on it accepts it. The model does not, so its test waits.
+    new Editor(path).predict('licence-present', { ...make, by: 'ann', kind: 'person' }).save({ by: 'ann', did: 'predict', claim: 'licence-present' });
+    new Editor(path).predict('licence-present', { ...make, says: 'Of 60 more, at least 54 have one.', needs: 54, by: 'model-x', kind: 'ai' }).save({ by: 'model-x', did: 'predict', claim: 'licence-present' });
+    let claim = load(readFileSync(path, 'utf8')).argument?.claims.get('licence-present');
+    assert.deepEqual(claim?.predictions.map((p) => p.accepted.map((a) => a.by)), [['ann'], []]);
+    assert.ok(claim?.predictions.every((p) => p.rev !== undefined && p.ifTrue === 1));
+
+    assert.throws(() => new Editor(path).accept('licence-present', 2, { by: 'model-x', kind: 'ai' }), /does not vouch for "licence-present"/);
+    assert.throws(() => new Editor(path).markOverdue('licence-present', 1, { by: 'model-x', kind: 'ai' }), /not overdue/);
+    assert.throws(() => new Editor(path).resolve('licence-present', 1, { outcome: 'yes', found: 47, source: 'x', by: 'model-x', kind: 'ai' }), /is a no, not a yes/);
+    assert.throws(() => new Editor(path).resolve('licence-present', 1, { found: 47, by: 'model-x', kind: 'ai' }), /needs a source/);
+    assert.throws(() => new Editor(path).predict('licence-present', { ...make, due: '2020-01-01', by: 'ann', kind: 'person' }), /already past/);
+
+    const result = new Editor(path)
+      .resolve('licence-present', 1, { found: 47, source: 'https://example.org/sample-of-60.csv', by: 'model-x', kind: 'ai' })
+      .save({ by: 'model-x', did: 'resolve', claim: 'licence-present' });
+    assert.equal(result.conclusion, 'falls');
+    assert.throws(() => new Editor(path).resolve('licence-present', 1, { found: 55, source: 'x', by: 'ann', kind: 'person' }), /already has an outcome/);
+    assert.throws(() => new Editor(path).accept('licence-present', 1, { by: 'ann', kind: 'person' }), /already has an outcome/);
+    assert.throws(() => new Editor(path).confirmOutcome('licence-present', 1, { by: 'model-x', kind: 'ai' }), /cannot also confirm/);
+    new Editor(path).confirmOutcome('licence-present', 1, { by: 'ann', kind: 'person' }).save({ by: 'ann', did: 'confirm', claim: 'licence-present' });
+
+    // Rewording to what was found clears the knock-out; the failed test stays where it was.
+    const reworded = new Editor(path).reword('licence-present', 'About 8 in 10 public repositories with over 1,000 stars carry a licence file.').save({ by: 'ann', did: 'reword', claim: 'licence-present' });
+    assert.equal(reworded.conclusion, 'stands');
+    claim = load(readFileSync(path, 'utf8')).argument?.claims.get('licence-present');
+    assert.equal(claim?.predictions[0]?.outcome, 'no');
+    assert.equal(claim?.predictions[0]?.confirmed[0]?.by, 'ann');
+
+    const entries = allPredictions(root);
+    assert.deepEqual(entries.map((e) => [e.file, e.claim, e.n, e.current]), [
+      ['arguments/reuse.yaml', 'licence-present', 1, false],
+      ['arguments/reuse.yaml', 'licence-present', 2, false],
+    ]);
+    const { due: now, upcoming } = dueOn(entries, due);
+    assert.deepEqual([now.length, now[0]?.late, upcoming.length], [1, 0, 0]);
+    assert.ok(new Editor(path) instanceof Editor && EditError !== undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+const made = (i: number, p: number, outcome: 'yes' | 'no' | undefined, more: Partial<Prediction> = {}): { file: string; claim: string; n: number; prediction: Prediction; current: boolean } => ({
+  file: 'arguments/x.yaml',
+  claim: 'c',
+  n: i,
+  current: true,
+  prediction: {
+    says: `case ${i}`,
+    how: 'look',
+    type: 'lookup',
+    p,
+    ifTrue: 1,
+    ifFalse: 0.5,
+    by: 'ann',
+    kind: 'person',
+    made: '2026-01-01',
+    due: '2026-01-10',
+    accepted: [],
+    confirmed: [],
+    ...(outcome ? { outcome, resolved: '2026-01-05', resolvedBy: i % 2 === 0 ? 'ann' : 'model-x', resolvedKind: 'person' as const, source: 's' } : {}),
+    ...more,
+  },
+});
+
+test('a record is scored per kind of prediction, against the setter\'s own base rate, and at its worst', () => {
+  // Ten lookups at 90%, nine of which came out yes: well calibrated, and no better than always saying 90%.
+  const safe = Array.from({ length: 10 }, (_, i) => made(i, 0.9, i === 0 ? 'no' : 'yes'));
+  const [ann] = records([...safe, made(10, 0.9, undefined), made(11, 0.6, 'yes', { type: 'forecast', made: '2026-01-01', resolved: '2026-06-01' })]);
+  const lookups = ann?.buckets[0];
+  assert.deepEqual([lookups?.scored, lookups?.open], [10, 1]);
+  assert.ok(Math.abs((lookups?.brier as number) - 0.09) < 1e-9);
+  assert.ok(Math.abs(lookups?.skill as number) < 1e-9);
+  // The open one, counted as if it went against her: (0.09 * 10 + 0.81) / 11.
+  assert.ok(Math.abs((lookups?.worst as number) - 1.71 / 11) < 1e-9);
+  // One forecast is too few to score, and it is not pooled with the lookups.
+  const forecasts = ann?.buckets[2];
+  assert.deepEqual([forecasts?.name, forecasts?.scored, forecasts?.brier], ['Forecasts, 30 days to a year', 1, undefined]);
+  assert.deepEqual([ann?.resolvedBySelf, ann?.resolvedByOthers, ann?.set], [5, 6, 12]);
+  assert.equal(ann?.bits, 1);
+
+  // Someone who tells the yeses from the noes scores well on skill.
+  const sharp = Array.from({ length: 10 }, (_, i) => made(i, i < 5 ? 0.9 : 0.1, i < 5 ? 'yes' : 'no'));
+  assert.ok(((records(sharp)[0]?.buckets[0]?.skill as number) ?? 0) > 0.9);
+  assert.equal(bucketOf(made(1, 0.5, undefined, { type: 'forecast', made: '2026-01-01', due: '2027-06-01' }).prediction), 'Forecasts, over a year');
+});

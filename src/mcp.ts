@@ -10,6 +10,8 @@ import {
   COST_LEVELS,
   EVIDENCE_KINDS,
   independentSources,
+  OUTCOMES,
+  PREDICTION_TYPES,
   knockOut,
   lintClaim,
   nextSteps,
@@ -23,6 +25,7 @@ import {
 } from './index.ts';
 import type { Argument, Evidence } from './index.ts';
 import { addIdea, createNotepad, ideasFor, IdeasError } from './ideas.ts';
+import { allPredictions, dueOn, records } from './record.ts';
 import { toJson } from './report.ts';
 import { searchClaims } from './search.ts';
 import { ARGUMENTS_DIR, argumentFiles, loadFile } from './workspace.ts';
@@ -98,10 +101,10 @@ const newClaim = z.object({
 });
 
 const server = new McpServer(
-  { name: 'argmap', version: '0.2.0' },
+  { name: 'argmap', version: '0.4.0' },
   {
     instructions:
-      'argmap maps arguments so their weak points are visible. An argument has a conclusion, claims that support each other, and bets: claims with no support, labelled by how far they are trusted. Statuses (stands, falls, contested) follow from the bets as written and never mean "true". Work in rounds: call next_steps, do the top step (usually refine_claim to replace a hand-wavy bet with sharper ones, or set_bet after checking a source), then call next_steps again. Reviews from people and AI count the same; when reviewers disagree the claim waits for adjudication and nothing picks a winner. Only label a bet corroborated or observed when a source was actually checked, and say which in the note.',
+      'argmap maps arguments so their weak points are visible. An argument has a conclusion, claims that support each other, and bets: claims with no support, labelled by how far they are trusted. Statuses (stands, falls, contested) follow from the bets as written and never mean "true". Work in rounds: call next_steps, do the top step (usually refine_claim to replace a hand-wavy bet with sharper ones, or set_bet after checking a source), then call next_steps again. Before checking any bet, call predict to record what you expect to find and how sure you are; after checking, call resolve_prediction in a later commit. Reviews from people and AI count the same; when reviewers disagree the claim waits for adjudication and nothing picks a winner. Only label a bet corroborated or observed when a source was actually checked, and say which in the note.',
   },
 );
 
@@ -349,13 +352,15 @@ server.registerTool(
 server.registerTool(
   'set_bet',
   {
-    description: 'Record the result of checking a bet: its new trust level and a note naming the source or test. Use corroborated or observed only if something was actually checked.',
+    description: 'Record the result of checking a bet: its new trust level and a note naming the source or test. Use corroborated or observed only if something was actually checked. Whoever sets the label is recorded on it and vouches for the bet from then on. Call predict before checking, not after.',
     inputSchema: { argument, id: z.string(), trust, note: z.string().optional(), cost: z.enum(COST_LEVELS).optional(), by },
   },
   guard((a: { argument: string; id: string; trust: (typeof TRUST_LEVELS)[number]; note?: string; cost?: (typeof COST_LEVELS)[number]; by: string }) => {
     const bet: Parameters<Editor['setBet']>[1] = { trust: a.trust };
     if (a.note) bet.note = a.note;
     if (a.cost) bet.cost = a.cost;
+    // Whoever sets the label vouches for the bet from here on.
+    bet.by = a.by;
     return describeEdit(new Editor(argumentPath(a.argument), ROOT).setBet(a.id, bet).save({ by: a.by, did: 'check', claim: a.id, note: `trust: ${a.trust}` }));
   }),
 );
@@ -440,6 +445,119 @@ server.registerTool(
         .save({ by: a.by, did: a.kind, claim: a.to, note: a.note ?? `${a.from} against ${a.to}` }),
     ),
   ),
+);
+
+/* ---------- Predictions ---------- */
+
+const chance = z.number().gt(0).lt(1);
+const kind = z.enum(REVIEWER_KINDS).describe('Whether whoever is doing this is a person or an AI.');
+const n = z.number().int().min(1).describe('Which prediction on the claim, counted from 1 in the order they were recorded.');
+type Who = { argument: string; id: string; n: number; by: string; kind: (typeof REVIEWER_KINDS)[number] };
+
+server.registerTool(
+  'predict',
+  {
+    description:
+      'Before checking a claim, record what you expect to find. This is the step that lets reality grade the work: the prediction is fixed once saved, and its outcome is recorded later, in a separate commit. Give three chances. p is your own chance of a yes, used only to score you. if_true is the chance of a yes if the claim is true (1 when the claim strictly implies it). if_false is the chance of a yes if the claim is false: the lower it is, the harder the test. A failed test knocks the claim out only when if_true is 0.95 or more and someone who vouches for the claim accepted the test before the outcome; otherwise a failure is evidence against. For a claim about many cases, fix a sample (how many independent cases will be looked at) and needs (how many must agree) now, and say in "how" the way the cases are picked. Use realistic samples: dozens of cases, not a handful.',
+    inputSchema: {
+      argument,
+      id: z.string(),
+      says: z.string().describe('What will be found, as a statement that turns out yes or no.'),
+      how: z.string().describe('How a yes is told from a no: where to look, what counts, and for a sample, how the cases are picked.'),
+      type: z.enum(PREDICTION_TYPES).describe('lookup: the answer already exists and only has to be found. forecast: it does not exist yet.'),
+      p: chance.describe('Your chance of a yes.'),
+      if_false: chance.describe('The chance of a yes if the claim were false.'),
+      if_true: z.number().gt(0).lte(1).optional().describe('The chance of a yes if the claim is true. Default 1.'),
+      sample: z.number().int().min(1).optional(),
+      needs: z.number().int().min(1).optional(),
+      due: z.string().describe('When the outcome will be recorded by, as YYYY-MM-DD.'),
+      by,
+      kind,
+    },
+  },
+  guard((a: { argument: string; id: string; says: string; how: string; type: (typeof PREDICTION_TYPES)[number]; p: number; if_false: number; if_true?: number; sample?: number; needs?: number; due: string; by: string; kind: (typeof REVIEWER_KINDS)[number] }) => {
+    const prediction: Parameters<Editor['predict']>[1] = { says: a.says, how: a.how, type: a.type, p: a.p, ifFalse: a.if_false, due: a.due, by: a.by, kind: a.kind };
+    if (a.if_true !== undefined) prediction.ifTrue = a.if_true;
+    if (a.sample !== undefined) prediction.sample = a.sample;
+    if (a.needs !== undefined) prediction.needs = a.needs;
+    return describeEdit(new Editor(argumentPath(a.argument), ROOT).predict(a.id, prediction).save({ by: a.by, did: 'predict', claim: a.id, note: `${Math.round(a.p * 100)}%: ${a.says}` }));
+  }),
+);
+
+server.registerTool(
+  'accept_test',
+  {
+    description: 'Agree that a claim you vouch for implies a test someone set on it. Only then can a failure knock the claim out. You vouch for a claim when you set its trust label or your confirmation of it stands. A test is accepted before its outcome is known, or not at all.',
+    inputSchema: { argument, id: z.string(), n, by, kind },
+  },
+  guard((a: Who) => describeEdit(new Editor(argumentPath(a.argument), ROOT).accept(a.id, a.n, { by: a.by, kind: a.kind }).save({ by: a.by, did: 'accept', claim: a.id, note: `test ${a.n}` }))),
+);
+
+server.registerTool(
+  'resolve_prediction',
+  {
+    description:
+      'Record what was found for a prediction. This must be a later commit than the one that recorded the prediction. For a prediction with a sample, give found (how many cases agreed) and the outcome follows from the count. Otherwise give outcome yes or no. Give a source others can open. To withdraw a prediction, give outcome void with a note saying why; withdrawals are counted on the record. An outcome is recorded once and cannot be changed.',
+    inputSchema: {
+      argument,
+      id: z.string(),
+      n,
+      outcome: z.enum(OUTCOMES).optional(),
+      found: z.number().int().min(0).optional(),
+      source: z.string().optional().describe('A URL, DOI or full citation that shows the outcome.'),
+      note: z.string().optional(),
+      by,
+      kind,
+    },
+  },
+  guard((a: Who & { outcome?: (typeof OUTCOMES)[number]; found?: number; source?: string; note?: string }) => {
+    const result: Parameters<Editor['resolve']>[2] = { by: a.by, kind: a.kind };
+    if (a.outcome !== undefined) result.outcome = a.outcome;
+    if (a.found !== undefined) result.found = a.found;
+    if (a.source) result.source = a.source;
+    if (a.note) result.note = a.note;
+    return describeEdit(new Editor(argumentPath(a.argument), ROOT).resolve(a.id, a.n, result).save({ by: a.by, did: 'resolve', claim: a.id, note: `test ${a.n}: ${a.outcome ?? `${a.found} agreed`}` }));
+  }),
+);
+
+server.registerTool(
+  'mark_overdue',
+  {
+    description: 'Mark a prediction whose due date has passed with no outcome. If the test was accepted, the claim cannot stand until someone records what was found. Anyone may do this, and anyone may then record the outcome.',
+    inputSchema: { argument, id: z.string(), n, by, kind },
+  },
+  guard((a: Who) => describeEdit(new Editor(argumentPath(a.argument), ROOT).markOverdue(a.id, a.n, { by: a.by, kind: a.kind }).save({ by: a.by, did: 'overdue', claim: a.id, note: `test ${a.n}` }))),
+);
+
+server.registerTool(
+  'confirm_outcome',
+  {
+    description: 'Put a second name to a recorded outcome, after opening its source and agreeing with it. It cannot be the name that recorded the outcome.',
+    inputSchema: { argument, id: z.string(), n, by, kind },
+  },
+  guard((a: Who) => describeEdit(new Editor(argumentPath(a.argument), ROOT).confirmOutcome(a.id, a.n, { by: a.by, kind: a.kind }).save({ by: a.by, did: 'confirm', claim: a.id, note: `test ${a.n}` }))),
+);
+
+server.registerTool(
+  'due_predictions',
+  {
+    description: 'Open predictions across the whole workspace: those that have come due as of a date (default today), most overdue first, then those still to come.',
+    inputSchema: { on: z.string().optional().describe('The date to ask about, as YYYY-MM-DD. Default: today.') },
+  },
+  guard((a: { on?: string }) => {
+    const { due, upcoming } = dueOn(allPredictions(ROOT), a.on ?? new Date().toISOString().slice(0, 10));
+    const row = (e: (typeof upcoming)[number]): object => ({ file: e.file, claim: e.claim, n: e.n, says: e.prediction.says, by: e.prediction.by, due: e.prediction.due, marked_overdue: e.prediction.overdue !== undefined });
+    return { due: due.map((d) => ({ ...row(d.entry), days_late: d.late })), upcoming: upcoming.map(row) };
+  }),
+);
+
+server.registerTool(
+  'prediction_record',
+  {
+    description: 'What each name\'s predictions show: counts, Brier score, skill against their own base rate, the score if every open prediction went against them, who recorded their outcomes, and how hard their tests were. Split into lookups and forecasts by horizon, and never pooled. A score is only given on 10 or more resolved predictions. This sits beside trust labels and does not set them.',
+    inputSchema: { name: z.string().optional().describe('One name to show. Default: everyone.') },
+  },
+  guard((a: { name?: string }) => records(allPredictions(ROOT)).filter((r) => a.name === undefined || r.name === a.name)),
 );
 
 await server.connect(new StdioServerTransport());

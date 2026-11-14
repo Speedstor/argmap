@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { relative, sep } from 'node:path';
-import { analyze, attackersOf, independentSources, lintClaim, nextSteps, parseFile, reason, resolution, reviewSummary, termKeys } from './index.ts';
+import { analyze, attackersOf, claimRecord, describeTest, independentSources, lintClaim, nextSteps, parseFile, reason, resolution, reviewSummary, termKeys, testability, vouchers } from './index.ts';
+import { allPredictions, formatRecord, records as nameRecords } from './record.ts';
 import type { Analysis, Argument, Claim, Flag, RawFile, Resolution, Status, Step, Term } from './index.ts';
 import { isRepo, tryGit } from './git.ts';
 import { parseSigners, readSigners } from './verify.ts';
@@ -106,6 +107,22 @@ function evidenceLines(claim: Claim): string[] {
   return out;
 }
 
+function testLines(claim: Claim): string[] {
+  if (claim.predictions.length === 0) return [];
+  const r = claimRecord(claim);
+  const backers = vouchers(claim);
+  const summary = [
+    `${r.passed} passed`,
+    `${r.failed} failed`,
+    `${r.open} open`,
+    r.passed > 0 ? `${r.bitsSurvived.toFixed(1)} bits survived, ${r.passedFromOpponents} of the passed set by someone who rejects the claim` : '',
+    r.offered > 0 ? `offered by others: ${r.offered}, accepted: ${r.offeredAccepted}` : '',
+    r.failedEarlier > 0 ? `failed under an earlier wording: ${r.failedEarlier}` : '',
+    `vouched for by: ${backers.length > 0 ? backers.join(', ') : 'nobody'}`,
+  ].filter((x) => x !== '');
+  return [`- tests: ${summary.join('; ')}`, ...claim.predictions.map((p, i) => `  - ${one(describeTest(claim, p, i + 1))}`)];
+}
+
 function reviewLines(claim: Claim): string[] {
   const r = reviewSummary(claim);
   if (r.current.length + r.stale.length === 0) return [];
@@ -192,7 +209,7 @@ function argumentClaim(arg: Argument, a: Analysis, claim: Claim, res: Resolution
   if (claim.origin !== '') out.push(`- library: defined in ${code(claim.origin)}`);
   if (claim.bet?.note) out.push(`- stops here because: ${one(claim.bet.note)}`);
   if (claim.note) out.push(`- note: ${one(claim.note)}`);
-  out.push(...flagLines(res?.flags.get(id) ?? []), ...reviewLines(claim), ...evidenceLines(claim), '');
+  out.push(...flagLines(res?.flags.get(id) ?? []), ...reviewLines(claim), ...evidenceLines(claim), ...testLines(claim), '');
   return out;
 }
 
@@ -232,6 +249,8 @@ function argumentPage(root: string, entry: Entry): string {
   out.push(`- claims: ${arg.claims.size}, of which ${entry.res?.bets ?? 0} are bets and ${entry.res?.sharp ?? 0} of those are specific enough to check`);
   out.push(`- evidence: ${count(withEvidence.reduce((n, c) => n + c.evidence.length, 0), 'record')} on ${count(withEvidence.length, 'claim')}`);
   out.push(`- reviews: ${reviewed} of ${arg.claims.size} claims reviewed`);
+  const tests = testability(arg);
+  out.push(`- tests: ${tests.tested} of ${tests.bets} bets have a test of their present wording; ${tests.passed} passed, ${tests.failed} failed, ${tests.open} open`);
   out.push(`- rounds: ${arg.log.length}${last ? `, last on ${last.at}` : ''}`);
   out.push(`- warnings: ${warnings.length}`, '');
 
@@ -304,7 +323,7 @@ function libraryPage(root: string, library: RawFile[], entries: Entry[]): string
       out.push(`- used in: ${used.length > 0 ? used.join(', ') : 'no argument'}`);
       if (claim.bet?.note) out.push(`- stops here because: ${one(claim.bet.note)}`);
       if (claim.note) out.push(`- note: ${one(claim.note)}`);
-      out.push(...flagLines(claim.bet ? lintClaim(claim) : []), ...reviewLines(claim), ...evidenceLines(claim), '');
+      out.push(...flagLines(claim.bet ? lintClaim(claim) : []), ...reviewLines(claim), ...evidenceLines(claim), ...testLines(claim), '');
     }
   }
   return out.join('\n');
@@ -382,6 +401,12 @@ function indexPage(root: string, entries: Entry[], library: RawFile[]): string {
     return `${count(r.reviews, 'review')}, ${count(r.evidence, 'evidence record')}, ${count(r.rounds, 'round')}`;
   };
   const source = signers.length > 0 || !list.from.startsWith('nowhere') ? `read from ${code(list.from)}` : 'but there is no allowed_signers file';
+  // What each name's predictions show. Scores are split by kind of prediction and never rolled into one number.
+  const scored = nameRecords(allPredictions(root));
+  out.push('## Records', '', 'What each name\'s predictions show. A record is split into lookups (the answer already existed) and forecasts by how long they ran, because skill at one says little about the other. It sits beside the trust labels and never sets one.', '');
+  if (scored.length === 0) out.push('Nobody has set a prediction yet.', '');
+  for (const r of scored) out.push('```', formatRecord(r), '```', '');
+
   out.push('## Trusted keys', '', `Who can put a judgment on record, ${source}. Record work under the name of the key that signs the commit.`, '');
   for (const s of signers) out.push(`- ${code(s.name)} (${s.kind === 'unknown' ? 'kind not stated' : s.kind})${s.label ? `, ${one(s.label)}` : ''}: ${row(s.name)}`);
   if (signers.length === 0) out.push('The list is empty, so no commit can be attributed to anyone.');
