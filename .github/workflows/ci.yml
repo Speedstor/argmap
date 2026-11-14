@@ -2,7 +2,10 @@
 #
 # On a pull request into main: type-check, run the tests, build the digest to
 # prove it still builds, and run "argmap verify" on the commits the pull request
-# adds. Nothing is published.
+# adds, using the checker from main. Nothing is published.
+#
+# On a push to main the pushed commits are verified as well, with the checker
+# and the trusted keys from before the push.
 #
 # On a push to main, or when run by hand: the same, then write the digest to the
 # digest branch. That branch holds generated Markdown only: one commit, replaced
@@ -45,9 +48,47 @@ jobs:
       # Every commit the pull request adds must be signed by a listed key, in the
       # signer's own name. A prediction and its outcome may not arrive in the same
       # pull request: the prediction has to be on main before anyone looks.
-      - name: Check signatures and that each guess came first
+      #
+      # The checker is taken from main, not from the pull request, so a pull request
+      # cannot rewrite the rules it is judged by. The list of trusted keys is read
+      # from main as well. This workflow file itself does come from the pull
+      # request: GitHub offers no other way in a public repository. So a pull
+      # request that changes .github/, src/verify.ts or allowed_signers deserves a
+      # look before it is merged, and the last step says so.
+      - name: Check signatures and that each guess came first, with the checker from main
         if: github.event_name == 'pull_request'
-        run: node bin/argmap.mjs verify "origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }}" --pull-request
+        run: |
+          base="origin/${{ github.base_ref }}"
+          git worktree add -q ../checker "$base"
+          (cd ../checker && npm ci --silent)
+          node ../checker/bin/argmap.mjs verify "$base..${{ github.event.pull_request.head.sha }}" --pull-request
+      - name: Say when a pull request changes the checker itself
+        if: github.event_name == 'pull_request'
+        run: |
+          changed=$(git diff --name-only "origin/${{ github.base_ref }}...${{ github.event.pull_request.head.sha }}" -- .github src/verify.ts src/sign.ts allowed_signers)
+          if [ -n "$changed" ]; then
+            echo "::warning::This pull request changes what checks pull requests. Read these before merging: $(echo $changed)"
+          fi
+      # A push to main is checked too, with the checker and the list of trusted keys
+      # as they were before the push. It cannot stop a push; it turns the commit red.
+      - name: Check the commits that reached main, with the checker from before the push
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        run: |
+          before="${{ github.event.before }}"
+          if ! git cat-file -e "$before^{commit}" 2>/dev/null; then
+            echo "::warning::The commit main pointed at before this push is gone, so main was rewritten. Nothing can be checked against it."
+            exit 1
+          fi
+          git worktree add -q ../checker "$before"
+          git show "$before:allowed_signers" > ../signers-before
+          # Once only: a checker from before version 0.4 fails every merged pull request, because it does not
+          # know that a merge can add nothing of its own. For the push that brings 0.4 in, use the new checker.
+          if grep -q mergeKind ../checker/src/verify.ts; then
+            (cd ../checker && npm ci --silent)
+            node ../checker/bin/argmap.mjs verify "$before..${{ github.sha }}" --signers ../signers-before
+          else
+            node bin/argmap.mjs verify "$before..${{ github.sha }}" --signers ../signers-before
+          fi
 
   digest:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

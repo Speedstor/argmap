@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, test } from 'node:test';
+import { claimRev } from '../src/index.ts';
 import { parseSigners, verifyRange } from '../src/verify.ts';
 
 let root: string;
@@ -147,7 +148,9 @@ test('commits are attributed by signature, and records must be in the signer\'s 
   assert.deepEqual(checks[1]?.problems, []);
   assert.deepEqual(checks[2]?.problems, []);
   assert.match(checks[3]?.problems[0] ?? '', /recorded as by "ann", but the commit was signed by model-x@ai/);
-  assert.deepEqual(checks[4]?.problems, []);
+  // That commit replaced the reviews with evidence. Taking away someone else's review is refused; taking back its own is not.
+  assert.equal(checks[4]?.problems.length, 2);
+  assert.ok(checks[4]?.problems.every((p) => /ann's review of "fact" was changed or removed by model-x@ai/.test(p)));
   assert.deepEqual(checks[5]?.problems, ['not signed']);
   assert.deepEqual(checks[6]?.problems, ['signed with a key that is not on the list']);
 });
@@ -269,11 +272,17 @@ test('an edited merge answers for the records it adds, and not for those its par
 
 /* ---------- Predictions: the guess must come first ---------- */
 
+const LICENCES = 'At least 9 in 10 public repositories with over 1,000 stars carry a licence file.';
 const licences = (rest: string, vouchedBy = 'ann'): string => `claims:
   licences:
-    text: At least 9 in 10 public repositories with over 1,000 stars carry a licence file.
+    text: ${LICENCES}
     bet: { trust: assumed, by: ${vouchedBy} }
 ${rest}`;
+
+/** Date the commits that follow. A date written in a record has to match the commit that records it. */
+const on = (day: string): void => {
+  clock = Date.parse(`${day}T12:00:00Z`) / 1000;
+};
 
 const guess = (rest = '', p = 0.8): string => `    predictions:
       - says: Of 60 such repositories drawn at random, at least 51 have a licence file.
@@ -286,6 +295,7 @@ const guess = (rest = '', p = 0.8): string => `    predictions:
         by: ann
         made: 2026-11-14
         due: 2026-11-28
+        rev: ${claimRev({ text: LICENCES, because: [] })}
 ${rest}`;
 
 const annAccepts = '        accepted: [{ by: ann, kind: person, date: 2026-11-14 }]\n';
@@ -299,8 +309,10 @@ const head = (): string => run(['rev-parse', 'HEAD']);
 test('a prediction, then its acceptance and outcome in later commits, each in the signer\'s name, pass', () => {
   const from = head();
   const file = 'claims/p1.yaml';
+  on('2026-11-14');
   commit({ [file]: licences('') }, 'ann makes a bet', ann);
   commit({ [file]: licences(guess(annAccepts)) }, 'ann predicts', ann);
+  on('2026-11-20');
   commit({ [file]: licences(guess(annAccepts + outcomeBy('model-x', 'ai'))) }, 'the model records what it found', bot);
   commit({ [file]: licences(guess(`${annAccepts + outcomeBy('model-x', 'ai')}        confirmed: [{ by: ann, kind: person, date: 2026-11-21 }]\n`)) }, 'ann confirms the outcome', ann);
   assert.deepEqual(since(from), [[], [], [], []]);
@@ -314,6 +326,7 @@ test('a prediction, then its acceptance and outcome in later commits, each in th
 
 test('a prediction cannot arrive with its outcome, be edited, or be removed', () => {
   const file = 'claims/p2.yaml';
+  on('2026-11-14');
   commit({ [file]: licences('') }, 'ann makes a bet', ann);
   let from = head();
   commit({ [file]: licences(guess(annAccepts + outcomeBy('ann', 'person', 55))) }, 'a prediction made after looking', ann);
@@ -331,8 +344,10 @@ test('a prediction cannot arrive with its outcome, be edited, or be removed', ()
 
 test('an outcome is recorded once, and in the name of whoever signs', () => {
   const file = 'claims/p3.yaml';
+  on('2026-11-14');
   commit({ [file]: licences('') }, 'ann makes a bet', ann);
   commit({ [file]: licences(guess(annAccepts)) }, 'ann predicts', ann);
+  on('2026-11-20');
   let from = head();
   commit({ [file]: licences(guess(annAccepts + outcomeBy('ann', 'person'))) }, 'the model records an outcome as ann', bot);
   assert.match(since(from)[0]?.[0] ?? '', /the outcome of the prediction .* is recorded as by "ann", but the commit was signed by model-x@ai/);
@@ -343,6 +358,7 @@ test('an outcome is recorded once, and in the name of whoever signs', () => {
 
 test('only someone who vouches for a claim can accept a test of it, and only before the outcome', () => {
   const file = 'claims/p4.yaml';
+  on('2026-11-14');
   commit({ [file]: licences('') }, 'ann makes a bet', ann);
   commit({ [file]: licences(guess()) }, 'ann predicts', ann);
   let from = head();
@@ -355,8 +371,161 @@ test('only someone who vouches for a claim can accept a test of it, and only bef
   assert.match(since(from)[0]?.[0] ?? '', /the trust label on "licences" is recorded as set by "ann", but the commit was signed by model-x@ai/);
 
   commit({ 'claims/p6.yaml': licences(guess()) }, 'ann bets and predicts', ann);
+  on('2026-11-20');
   commit({ 'claims/p6.yaml': licences(guess(outcomeBy('model-x', 'ai'))) }, 'the model records a failure', bot);
   from = head();
   commit({ 'claims/p6.yaml': licences(guess(annAccepts + outcomeBy('model-x', 'ai'))) }, 'ann accepts after the fact', ann);
   assert.match(since(from)[0]?.[0] ?? '', /was accepted when its outcome was already known/);
+});
+
+/* ---------- Attacks found in review: each passed verify before, and is refused now ---------- */
+
+// Two bets in one file: ann vouches for the first, and the second has whoever is named.
+const SHOPS = 'Every shop on the street opens before nine.';
+const OTHER = 'The street has a bakery.';
+const street = (onShops: string, onOther = '', otherBy = 'bob'): string => `claims:
+  shops:
+    text: ${SHOPS}
+    bet: { trust: assumed, by: ann }
+${onShops}  other:
+    text: ${OTHER}
+    bet: { trust: assumed, by: ${otherBy} }
+${onOther}`;
+const door = (o: { says?: string; by?: string; rev?: string; made?: string; due?: string; type?: string; rest?: string } = {}): string => `    predictions:
+      - says: ${o.says ?? 'The bakery opens before nine.'}
+        how: Read the sign on the door.
+        type: ${o.type ?? 'lookup'}
+        p: 0.9
+        if_false: 0.3
+        by: ${o.by ?? 'ann'}
+        made: ${o.made ?? '2026-11-14'}
+        due: ${o.due ?? '2026-11-28'}
+        rev: ${o.rev ?? claimRev({ text: SHOPS, because: [] })}
+${o.rest ?? ''}`;
+const acceptedBy = (by: string): string => `        accepted: [{ by: ${by}, kind: person, date: 2026-11-14 }]\n`;
+const doorSays = (word: string, by: string): string => `        outcome: "${word}"\n        resolved: 2026-11-20\n        resolved_by: ${by}\n        resolved_kind: person\n        source: https://example.org/door\n`;
+const bob = makeKey();
+const three = parseSigners(`ann@person ${ann.listed}\nbob@person ${bob.listed}\nmodel-x@ai ${bot.listed}\n`);
+const sinceWith = (from: string): string[] => verifyRange(root, `${from}..HEAD`, three).flatMap((c) => c.problems);
+
+test('a test cannot be carried from one claim to another', () => {
+  const file = 'claims/a1.yaml';
+  on('2026-11-14');
+  commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
+  commit({ [file]: street(door({ rest: acceptedBy('ann') })) }, 'ann predicts', ann);
+  on('2026-11-20');
+  commit({ [file]: street(door({ rest: acceptedBy('ann') + doorSays('no', 'ann') })) }, 'it fails', ann);
+  const from = head();
+  // Laundering a failure: move the failed test to a claim nobody reads.
+  commit({ [file]: street('', door({ rest: acceptedBy('ann') + doorSays('no', 'ann') })) }, 'ann moves the failed test', ann);
+  const found = sinceWith(from);
+  assert.ok(found.some((p) => /a prediction on "shops" was changed or removed/.test(p)));
+  assert.ok(found.some((p) => /the prediction on "other" .* arrived together with its outcome/.test(p)));
+  assert.ok(found.some((p) => /does not carry the fingerprint of the claim it is recorded on/.test(p)));
+});
+
+test('nobody can knock out a claim by vouching for a test somewhere else', () => {
+  const file = 'claims/a2.yaml';
+  on('2026-11-14');
+  commit({ [file]: street('', '').replace('by: bob', 'by: ann') }, 'ann bets', ann);
+  commit({ [file]: street('', '') }, 'bob takes the second bet in his own name', bob);
+  let from = head();
+  // Bob sets a strawman on his own claim, typed with the fingerprint of ann's, and accepts it himself.
+  const straw = (rest: string): string => door({ says: 'Every shop on the street is open at 3am.', by: 'bob', rest });
+  commit({ [file]: street('', straw(acceptedBy('bob'))) }, 'bob sets a strawman on his own claim', bob);
+  assert.ok(sinceWith(from).some((p) => /does not carry the fingerprint of the claim it is recorded on/.test(p)));
+  on('2026-11-20');
+  commit({ [file]: street('', straw(acceptedBy('bob') + doorSays('no', 'bob'))) }, 'bob records no', bob);
+  from = head();
+  commit({ [file]: street(straw(acceptedBy('bob') + doorSays('no', 'bob')), '') }, 'bob moves it onto ann\'s claim', bob);
+  const found = sinceWith(from);
+  assert.ok(found.some((p) => /a prediction on "other" was changed or removed/.test(p)));
+  assert.ok(found.some((p) => /the prediction on "shops" .* arrived together with its outcome/.test(p)));
+  assert.ok(found.some((p) => /bob accepted .* without vouching for the claim/.test(p)));
+});
+
+test('a prediction copied under another claim is a new prediction, and is refused with its outcome', () => {
+  const file = 'claims/a3.yaml';
+  on('2026-11-14');
+  commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
+  commit({ [file]: street(door({ rest: acceptedBy('ann') })) }, 'ann predicts', ann);
+  on('2026-11-20');
+  const passed = door({ rest: acceptedBy('ann') + doorSays('yes', 'ann') });
+  commit({ [file]: street(passed) }, 'it passes', ann);
+  const from = head();
+  commit({ [file]: street(passed, passed) }, 'ann copies it under the other claim', ann);
+  assert.ok(sinceWith(from).some((p) => /the prediction on "other" .* arrived together with its outcome/.test(p)));
+  // Written twice under the same claim, the file does not load, and verify says so.
+  const twice = street(passed + passed.replace('    predictions:\n', ''));
+  commit({ [file]: twice }, 'ann writes it twice', ann);
+  assert.ok(sinceWith(from).some((p) => /is the same prediction as an earlier one/.test(p)));
+});
+
+test('only its setter can withdraw a prediction', () => {
+  const file = 'claims/a4.yaml';
+  on('2026-11-14');
+  commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
+  commit({ [file]: street(door({ rest: acceptedBy('ann') })) }, 'ann predicts', ann);
+  const from = head();
+  on('2026-11-15');
+  commit({ [file]: street(door({ rest: `${acceptedBy('ann')}        outcome: void\n        resolved: 2026-11-15\n        resolved_by: bob\n        note: Changed my mind.\n` })) }, 'bob withdraws ann\'s test', bob);
+  assert.ok(sinceWith(from).some((p) => /bob withdrew the prediction .* which ann set/.test(p)));
+});
+
+test('a signer can take back only what is in their own name', () => {
+  const file = 'claims/a5.yaml';
+  const bet = (rest: string): string => `claims:\n  shops:\n    text: ${SHOPS}\n    bet: assumed\n${rest}`;
+  const bobs = `    evidence:\n      - { kind: account, stance: against, says: The bakery opened at ten., source: "https://example.org/x", by: bob }\n    reviews:\n      - { by: bob, kind: person, verdict: reject }\nlog:\n  - { at: 2026-11-14, by: bob, did: review, claim: shops }\n`;
+  commit({ [file]: bet(bobs) }, 'bob rejects, with evidence', bob);
+  let from = head();
+  commit({ [file]: bet('') }, 'ann deletes bob\'s review, evidence and log entry', ann);
+  const found = sinceWith(from);
+  assert.equal(found.length, 3);
+  assert.ok(found.some((p) => /bob's review of "shops" was changed or removed by ann@person/.test(p)));
+  assert.ok(found.some((p) => /evidence on "shops" added by bob was changed or removed/.test(p)));
+  assert.ok(found.some((p) => /a log entry by bob was changed or removed/.test(p)));
+  // Bob taking back his own is his to do.
+  commit({ [file]: bet(bobs) }, 'bob puts them back', bob);
+  from = head();
+  commit({ [file]: bet('') }, 'bob withdraws them', bob);
+  assert.deepEqual(sinceWith(from), []);
+});
+
+test('a trust label that carries a name can only be changed by taking it over', () => {
+  const file = 'claims/a6.yaml';
+  const label = (bet: string): string => `claims:\n  shops:\n    text: ${SHOPS}\n    bet: ${bet}\n`;
+  commit({ [file]: label('{ trust: assumed, by: ann }') }, 'ann sets assumed', ann);
+  let from = head();
+  commit({ [file]: label('{ trust: observed, by: ann }') }, 'bob raises ann\'s label', bob);
+  assert.match(sinceWith(from)[0] ?? '', /recorded as set by "ann", but the commit was signed by bob@person/);
+  from = head();
+  commit({ [file]: label('observed') }, 'bob strips ann\'s name', bob);
+  assert.match(sinceWith(from)[0] ?? '', /carried ann's name, and bob@person changed it without putting their own name on it/);
+  from = head();
+  commit({ [file]: label('{ trust: assumed, by: bob }') }, 'bob takes the label over in his own name', bob);
+  assert.deepEqual(sinceWith(from), []);
+});
+
+test('the dates in a prediction have to match the commits that record them', () => {
+  const file = 'claims/a7.yaml';
+  on('2026-11-14');
+  commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
+  let from = head();
+  commit({ [file]: street(door({ made: '2020-01-01', type: 'forecast' })) }, 'a forecast "made" in 2020', ann);
+  assert.ok(sinceWith(from).some((p) => /says it was made on 2020-01-01, but the commit that records it is dated 2026-11-14/.test(p)));
+
+  commit({ 'claims/a8.yaml': street(door({ due: '2030-01-01', type: 'forecast', rest: acceptedBy('ann') }), '', 'ann') }, 'ann forecasts for 2030', ann);
+  from = head();
+  commit({ 'claims/a8.yaml': street(door({ due: '2030-01-01', type: 'forecast', rest: `${acceptedBy('ann')}        overdue: { by: bob, kind: person, date: 2030-01-02 }\n` }), '', 'ann') }, 'bob marks it overdue years early', bob);
+  assert.ok(sinceWith(from).some((p) => /the overdue marker .* is dated 2030-01-02, but the commit that records it is dated 2026-11-14/.test(p)));
+});
+
+test('a claim cannot be reworded out from under an accepted test', () => {
+  const file = 'claims/a9.yaml';
+  on('2026-11-14');
+  commit({ [file]: street('', '', 'ann') }, 'ann bets', ann);
+  commit({ [file]: street(door({ rest: acceptedBy('ann') })) }, 'ann predicts', ann);
+  const from = head();
+  commit({ [file]: street(door({ rest: acceptedBy('ann') })).replace(SHOPS, 'Some shops on the street open before nine.') }, 'ann softens the claim while the test is open', ann);
+  assert.ok(sinceWith(from).some((p) => /"shops" was reworded or rewired while an accepted test of it was waiting/.test(p)));
 });

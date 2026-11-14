@@ -21,7 +21,7 @@ export function vouchers(claim: Claim): string[] {
 
 /** Does this test the claim as it reads now? A test of an earlier wording is kept, and no longer counts. */
 export function isCurrent(claim: Claim, prediction: Prediction, rev = claimRev(claim)): boolean {
-  return prediction.rev === undefined || prediction.rev === rev;
+  return prediction.rev === rev;
 }
 
 /**
@@ -44,18 +44,27 @@ export function impliedCredence(prediction: Prediction): number | undefined {
 }
 
 /**
- * A failed test knocks a claim out when three things hold: it tested the
- * present wording, the claim was taken to imply a yes, and someone who vouches
- * for the claim agreed to that before the outcome. Anything less is evidence
- * against the claim, not a refutation.
+ * Could a failure of this test knock its claim out? Only when the claim was
+ * taken to imply a yes, and someone who vouches for the claim agreed to that
+ * before the outcome. A pass counts for the claim only where this holds: a
+ * test that could not have hurt shows nothing by passing.
  */
-export function knocks(claim: Claim, prediction: Prediction, rev = claimRev(claim)): boolean {
-  return prediction.outcome === 'no' && prediction.ifTrue >= IMPLIES && prediction.accepted.length > 0 && isCurrent(claim, prediction, rev);
+export function couldKnock(prediction: Prediction): boolean {
+  return prediction.ifTrue >= IMPLIES && prediction.accepted.length > 0;
 }
 
-/** An accepted test that is marked overdue and still open: the claim cannot stand until someone records what was found. */
-export function blocks(claim: Claim, prediction: Prediction, rev = claimRev(claim)): boolean {
-  return prediction.outcome === undefined && prediction.overdue !== undefined && prediction.accepted.length > 0 && isCurrent(claim, prediction, rev);
+/** A failed test knocks the claim out when it could (see couldKnock) and it tested the present wording. Anything less is evidence against. */
+export function knocks(claim: Claim, prediction: Prediction, rev = claimRev(claim)): boolean {
+  return prediction.outcome === 'no' && couldKnock(prediction) && isCurrent(claim, prediction, rev);
+}
+
+/**
+ * An accepted test that is marked overdue and still open: the claim cannot
+ * stand until someone records what was found. This holds whatever the claim's
+ * wording is now, so rewording is not a way out of a test that is pending.
+ */
+export function blocks(_claim: Claim, prediction: Prediction): boolean {
+  return prediction.outcome === undefined && prediction.overdue?.date !== undefined && prediction.overdue.date > prediction.due && prediction.accepted.length > 0;
 }
 
 /** Claims the tests have settled: fallen because a test failed, or held back because one is overdue. */
@@ -66,52 +75,65 @@ export function testVerdicts(arg: Argument): { fallen: Set<string>; held: Set<st
     if (claim.predictions.length === 0) continue;
     const rev = claimRev(claim);
     if (claim.predictions.some((p) => knocks(claim, p, rev))) fallen.add(claim.id);
-    else if (claim.predictions.some((p) => blocks(claim, p, rev))) held.add(claim.id);
+    else if (claim.predictions.some((p) => blocks(claim, p))) held.add(claim.id);
   }
   return { fallen, held };
 }
 
-/** What a claim has been through. This is the part of a record nobody can pad with easy predictions of their own choosing. */
+/**
+ * What a claim has been through. A pass is counted only where a failure would
+ * have knocked the claim out, and the hardness of a test is kept apart by who
+ * typed it: the claim's own vouchers, or someone else.
+ */
 export interface ClaimRecord {
-  /** Tests of the present wording. */
+  /** Tests of the present wording that are waiting for an outcome. */
   open: number;
+  /** Passed tests that would have knocked the claim out had they failed. */
   passed: number;
+  /** Of those, how many were set by someone who was not vouching for the claim. */
+  passedFromOthers: number;
+  /** Passed tests that could not have knocked the claim out. They show nothing, and are counted so that is visible. */
+  passedNoRisk: number;
   failed: number;
-  /** Of the passed tests, how many were set by someone whose rejection of the claim stands. */
-  passedFromOpponents: number;
-  /** The hardness of the passed tests, added up, in bits. */
-  bitsSurvived: number;
-  /** Tests set by someone who does not vouch for the claim, and how many of those a voucher accepted. */
+  /** The hardness of the passed tests, in bits, as typed by the claim's own vouchers, and as typed by others. */
+  bitsOwn: number;
+  bitsOthers: number;
+  /** Tests set by someone who was not vouching for the claim, and how many of those a voucher accepted. */
   offered: number;
   offeredAccepted: number;
+  /** Tests withdrawn after someone who vouches for the claim had accepted them. */
+  withdrawn: number;
   /** Tests that failed under an earlier wording: how often the claim was reworded after failing. */
   failedEarlier: number;
 }
 
 export function claimRecord(claim: Claim): ClaimRecord {
   const rev = claimRev(claim);
-  const backers = new Set(vouchers(claim));
-  const rejecters = new Set(
-    reviewSummary(claim)
-      .current.filter((r) => r.verdict === 'reject')
-      .map((r) => r.by),
-  );
-  const record: ClaimRecord = { open: 0, passed: 0, failed: 0, passedFromOpponents: 0, bitsSurvived: 0, offered: 0, offeredAccepted: 0, failedEarlier: 0 };
+  const record: ClaimRecord = { open: 0, passed: 0, passedFromOthers: 0, passedNoRisk: 0, failed: 0, bitsOwn: 0, bitsOthers: 0, offered: 0, offeredAccepted: 0, withdrawn: 0, failedEarlier: 0 };
   for (const p of claim.predictions) {
+    if (p.outcome === 'void' && p.accepted.length > 0) record.withdrawn++;
     if (!isCurrent(claim, p, rev)) {
       if (p.outcome === 'no') record.failedEarlier++;
       continue;
     }
-    if (!backers.has(p.by)) {
+    // Whether the setter was vouching is read off the acceptances, which are fixed, and not off who vouches today.
+    const own = p.accepted.some((a) => a.by === p.by);
+    if (!own) {
       record.offered++;
       if (p.accepted.length > 0) record.offeredAccepted++;
     }
     if (p.outcome === undefined) record.open++;
+    else if (p.outcome === 'no') record.failed++;
+    else if (p.outcome === 'yes' && !couldKnock(p)) record.passedNoRisk++;
     else if (p.outcome === 'yes') {
       record.passed++;
-      record.bitsSurvived += severity(p) ?? 0;
-      if (rejecters.has(p.by)) record.passedFromOpponents++;
-    } else if (p.outcome === 'no') record.failed++;
+      const bits = severity(p) ?? 0;
+      if (own) record.bitsOwn += bits;
+      else {
+        record.bitsOthers += bits;
+        record.passedFromOthers++;
+      }
+    }
   }
   return record;
 }
@@ -132,8 +154,12 @@ export function predictionIssues(arg: Argument): Issue[] {
     const rev = claimRev(claim);
     const backers = vouchers(claim);
     claim.predictions.forEach((p, i) => {
-      if (!isCurrent(claim, p, rev)) return;
       const name = `"${claim.id}", test ${i + 1} ("${short(p.says)}")`;
+      if (!isCurrent(claim, p, rev)) {
+        // A pending test follows the claim through a reword.
+        if (blocks(claim, p)) warn('test-overdue', `${name} was due on ${p.due} and has no outcome. The claim was reworded since, and still cannot stand until someone records what was found.`, claim.id);
+        return;
+      }
       if (knocks(claim, p, rev)) {
         warn('test-failed', `${name} failed${p.found !== undefined ? `: ${p.found} of ${p.sample}, with ${p.needs} needed` : ''}. The claim was vouched to pass it, so it has fallen. Reword it to what was found, or let it fall.`, claim.id);
       } else if (p.outcome === 'no') {
@@ -143,7 +169,8 @@ export function predictionIssues(arg: Argument): Issue[] {
           claim.id,
         );
       }
-      if (blocks(claim, p, rev)) warn('test-overdue', `${name} was due on ${p.due} and has no outcome. The claim cannot stand until someone records what was found.`, claim.id);
+      if (p.outcome === 'void' && p.accepted.length > 0) warn('test-withdrawn', `${name} was withdrawn after ${p.accepted.map((a) => a.by).join(' and ')} had accepted it${p.note ? `: ${p.note}` : ''}. It is counted on the claim's record and on ${p.by}'s.`, claim.id);
+      if (blocks(claim, p)) warn('test-overdue', `${name} was due on ${p.due} and has no outcome. The claim cannot stand until someone records what was found.`, claim.id);
       if (p.outcome !== undefined) return;
       if (p.ifTrue >= IMPLIES && p.accepted.length === 0) {
         warn(
@@ -183,6 +210,8 @@ export function predictionIssues(arg: Argument): Issue[] {
 /** How far the bets have been put to a test: of the bets, how many have a test of their present wording, and how those stand. */
 export interface Testability {
   bets: number;
+  /** Bets nobody vouches for. No test can knock these out, so a test of one shows little until someone puts a name to it. */
+  unvouched: number;
   tested: number;
   open: number;
   passed: number;
@@ -190,12 +219,13 @@ export interface Testability {
 }
 
 export function testability(arg: Argument): Testability {
-  const out: Testability = { bets: 0, tested: 0, open: 0, passed: 0, failed: 0 };
+  const out: Testability = { bets: 0, unvouched: 0, tested: 0, open: 0, passed: 0, failed: 0 };
   for (const claim of arg.claims.values()) {
     const rev = claimRev(claim);
     const current = claim.predictions.filter((p) => isCurrent(claim, p, rev));
     if (claim.bet) {
       out.bets++;
+      if (vouchers(claim).length === 0) out.unvouched++;
       if (current.length > 0) out.tested++;
     }
     for (const p of current) {
@@ -209,7 +239,7 @@ export function testability(arg: Argument): Testability {
 
 /** One line on a test, for a report or a digest. */
 export function describeTest(claim: Claim, p: Prediction, n: number): string {
-  const state = p.outcome === 'yes' ? 'passed' : p.outcome === 'no' ? (knocks(claim, p) ? 'failed, and knocked the claim out' : 'failed, counted as evidence against') : p.outcome === 'void' ? 'withdrawn' : blocks(claim, p) ? 'overdue, holding the claim back' : p.overdue ? 'overdue' : 'open';
+  const state = p.outcome === 'yes' ? (couldKnock(p) ? 'passed' : 'passed, though a failure could not have knocked the claim out') : p.outcome === 'no' ? (knocks(claim, p) ? 'failed, and knocked the claim out' : 'failed, counted as evidence against') : p.outcome === 'void' ? 'withdrawn' : blocks(claim, p) ? 'overdue, holding the claim back' : p.overdue ? 'overdue' : 'open';
   const bits = severity(p);
   const parts = [
     `test ${n}, ${p.type}, ${state}${isCurrent(claim, p) ? '' : ' (on an earlier wording)'}: ${p.says}`,

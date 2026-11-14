@@ -57,7 +57,7 @@ export function nextSteps(arg: Argument, analysis: Analysis): Step[] {
       push({ ...base, kind: 'answer', decisive, why: `A test of "${label(id)}" failed: "${against.says}" It counts as evidence against. Say why the claim still holds, or reword it.` }, rank);
       return true;
     }
-    const late = current.find((p) => blocks(claim, p));
+    const late = claim.predictions.find((p) => blocks(claim, p));
     if (late) {
       push({ ...base, kind: 'resolve', decisive: true, why: `A test of "${label(id)}" was due on ${late.due} and has no outcome, so the claim cannot stand. Record what was found.` }, rank);
       return true;

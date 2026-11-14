@@ -402,7 +402,7 @@ server.registerTool(
 server.registerTool(
   'reword_claim',
   {
-    description: 'Change the wording of a claim, for example to replace a vague word with a figure. Existing reviews of it become stale.',
+    description: 'Change the wording of a claim, for example to replace a vague word with a figure. Existing reviews of it become stale. Refused while an accepted test of the claim is waiting for its outcome: record what was found first.',
     inputSchema: { argument, id: z.string(), text: z.string(), by, note: z.string().optional() },
   },
   guard((a: { argument: string; id: string; text: string; by: string; note?: string }) =>
@@ -497,7 +497,7 @@ server.registerTool(
   'resolve_prediction',
   {
     description:
-      'Record what was found for a prediction. This must be a later commit than the one that recorded the prediction. For a prediction with a sample, give found (how many cases agreed) and the outcome follows from the count. Otherwise give outcome yes or no. Give a source others can open. To withdraw a prediction, give outcome void with a note saying why; withdrawals are counted on the record. An outcome is recorded once and cannot be changed.',
+      'Record what was found for a prediction. This must be a later commit than the one that recorded the prediction. For a prediction with a sample, give found (how many cases agreed) and the outcome follows from the count. Otherwise give outcome yes or no. Give a source others can open. Only the setter can withdraw a prediction: give outcome void with a note saying why. Withdrawals are counted on the record of the setter, in their worst-case score, and on the claim. An outcome is recorded once and cannot be changed.',
     inputSchema: {
       argument,
       id: z.string(),
@@ -554,7 +554,7 @@ server.registerTool(
 server.registerTool(
   'prediction_record',
   {
-    description: 'What each name\'s predictions show: counts, Brier score, skill against their own base rate, the score if every open prediction went against them, who recorded their outcomes, and how hard their tests were. Split into lookups and forecasts by horizon, and never pooled. A score is only given on 10 or more resolved predictions. This sits beside trust labels and does not set them.',
+    description: 'What each name\'s predictions show: counts, Brier score, the score if every open or withdrawn prediction went against them, who recorded their outcomes, and how hard their tests were. Split into lookups and forecasts by horizon, and never pooled. A score is only given on 10 or more resolved predictions. This sits beside trust labels and does not set them.',
     inputSchema: { name: z.string().optional().describe('One name to show. Default: everyone.') },
   },
   guard((a: { name?: string }) => records(allPredictions(ROOT)).filter((r) => a.name === undefined || r.name === a.name)),

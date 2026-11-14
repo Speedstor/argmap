@@ -112,11 +112,12 @@ function testLines(claim: Claim): string[] {
   const r = claimRecord(claim);
   const backers = vouchers(claim);
   const summary = [
-    `${r.passed} passed`,
+    `${r.passed} passed where a failure would have knocked it out${r.passed > 0 ? ` (${r.passedFromOthers} set by someone not vouching for it; hardness ${r.bitsOthers.toFixed(1)} bits as typed by others, ${r.bitsOwn.toFixed(1)} as typed by its own vouchers)` : ''}`,
+    r.passedNoRisk > 0 ? `${r.passedNoRisk} passed with nothing at risk` : '',
     `${r.failed} failed`,
     `${r.open} open`,
-    r.passed > 0 ? `${r.bitsSurvived.toFixed(1)} bits survived, ${r.passedFromOpponents} of the passed set by someone who rejects the claim` : '',
     r.offered > 0 ? `offered by others: ${r.offered}, accepted: ${r.offeredAccepted}` : '',
+    r.withdrawn > 0 ? `withdrawn after acceptance: ${r.withdrawn}` : '',
     r.failedEarlier > 0 ? `failed under an earlier wording: ${r.failedEarlier}` : '',
     `vouched for by: ${backers.length > 0 ? backers.join(', ') : 'nobody'}`,
   ].filter((x) => x !== '');
@@ -250,7 +251,7 @@ function argumentPage(root: string, entry: Entry): string {
   out.push(`- evidence: ${count(withEvidence.reduce((n, c) => n + c.evidence.length, 0), 'record')} on ${count(withEvidence.length, 'claim')}`);
   out.push(`- reviews: ${reviewed} of ${arg.claims.size} claims reviewed`);
   const tests = testability(arg);
-  out.push(`- tests: ${tests.tested} of ${tests.bets} bets have a test of their present wording; ${tests.passed} passed, ${tests.failed} failed, ${tests.open} open`);
+  out.push(`- tests: ${tests.tested} of ${tests.bets} bets have a test of their present wording; ${tests.passed} passed, ${tests.failed} failed, ${tests.open} open; ${tests.unvouched} bets have nobody vouching for them, so no test can knock them out`);
   out.push(`- rounds: ${arg.log.length}${last ? `, last on ${last.at}` : ''}`);
   out.push(`- warnings: ${warnings.length}`, '');
 

@@ -161,22 +161,29 @@ npm run argmap -- record     # what each name's predictions show
 - **The guess must come first.** `verify` refuses a prediction that arrives
   with its outcome, or that is edited or removed afterwards. In a pull request
   the prediction has to be on `main` before its outcome is recorded.
+- **A test belongs to its claim.** It carries the claim's fingerprint, cannot
+  be moved or copied to another claim, and the claim cannot be reworded while
+  an accepted test of it is waiting.
 - **A record per name, never pooled.** Lookups (the answer already existed) and
   forecasts are scored apart, forecasts by how long they ran, and only on ten
-  or more resolved. Each part shows a Brier score, skill against your own usual
-  answer (so a diet of safe predictions scores near zero), and the score if
-  every open prediction went against you.
-- **A record per claim.** How many tests it has survived and how hard they
-  were, how many were set by someone who rejects it, and how many failed under
-  an earlier wording.
+  or more resolved. Each part shows a Brier score, and the score if every open
+  or withdrawn prediction went against you. There is no skill score: you chose
+  the questions, and any score can be padded with sure things.
+- **A record per claim.** How many tests it has survived, counted only where a
+  failure would have knocked it out; how hard they were, kept apart by whether
+  its own vouchers or someone else typed the figures; how many were withdrawn;
+  and how many failed under an earlier wording.
 - **Trust labels stay typed.** A record sits beside a label and never sets it.
 - **Reminders.** `.github/workflows/due.yml` opens an issue each day for every
   prediction that has come due, so nobody has to remember to look.
 
 What this does not close. Someone can look first and predict afterwards; for a
-lookup nothing in a repository can prove otherwise. Anyone who can confirm a
-claim can vouch for it, including someone who wants it to fail. And a
-prediction says nothing about a bet that cannot be scored at all. The format
+lookup nothing in a repository can prove otherwise. Dates are checked against
+commit dates, which the person committing sets. Anyone who can confirm a
+claim, or put their own name on its trust label, can vouch for it, including
+someone who wants it to fail. A bet nobody vouches for cannot be knocked out by
+any test; the report counts those. How hard a test is rests on figures somebody
+typed. And a prediction says nothing about a bet that cannot be scored at all. The format
 is described in [docs/format.md](docs/format.md).
 
 ## The claims database
@@ -260,10 +267,20 @@ npm run argmap -- verify HEAD~5..HEAD
 
 `verify` checks that every commit is signed by a listed key, and that each
 review, piece of evidence, log entry and prediction a commit adds is in the
-signer's own name and kind. It also keeps predictions in order: none arrives
-with its outcome, and none is edited or removed afterwards. CI runs it on
-every pull request with `--pull-request`, which also refuses a prediction and
-its outcome in the same pull request. Nobody can record a judgment as someone else, and an AI cannot
+signer's own name and kind. A signer can take back only what is in their own
+name: removing someone else's review, evidence or log entry is refused, and so
+is changing a trust label that carries someone else's name without taking it
+over. It also keeps predictions in order: none arrives with its outcome, and
+none is edited, moved or removed afterwards.
+
+CI runs it on every pull request with `--pull-request`, which also refuses a
+prediction and its outcome in the same pull request. The checker and the list
+of trusted keys are taken from `main`, so a pull request cannot rewrite the
+rules it is judged by. A push to `main` is checked the same way, against the
+checker from before the push. Two limits: the workflow file itself comes from
+the pull request, and a check on a push can turn a commit red but cannot stop
+it. Protecting `main` so that it only changes through pull requests is a
+setting on GitHub, not something in this repository. Nobody can record a judgment as someone else, and an AI cannot
 record one as a person. A signature shows which key signed; for an AI that
 means the agent its operator gave the key to, not which model wrote the text.
 Signatures are checked with the public key alone, in the tool itself, so no

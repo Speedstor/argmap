@@ -163,7 +163,8 @@ A prediction is a test of a claim, written down before the answer is known.
 claims:
   licence-present:
     text: At least 9 in 10 public repositories with over 1,000 stars carry a licence file.
-    bet: { trust: assumed, by: ann }      # by: who set the label, and so vouches for the bet
+    bet: { trust: assumed, by: ann }      # by: who set the label, and so vouches for the bet.
+                                          # A signer can put down only their own name
     predictions:
       - says: Of 60 such repositories drawn at random, at least 51 have a licence file.
         how: Draw 60 from the public list. A repository counts when a LICENSE or COPYING file is at its top level.
@@ -177,7 +178,7 @@ claims:
         kind: person
         made: 2026-11-14
         due: 2026-11-28
-        rev: e84ce6ae         # fingerprint of the claim wording this tests
+        rev: 357d629c17e7d67cc157cebc00c17f23   # fingerprint of the claim wording this tests; written by the tools
         # Everything below is added later, each part once.
         accepted:
           - { by: ann, kind: person, date: 2026-11-14 }
@@ -208,7 +209,16 @@ for the status and stays on the claim's record. A failed test that misses any
 of the three is evidence against the claim, and is reported as such.
 
 **What a passed test does.** Nothing to any status. It is added to what the
-claim has survived.
+claim has survived, and only if a failure would have knocked the claim out. A
+test nobody accepted, or one the claim was not taken to imply, shows nothing by
+passing, and is counted apart as passed with nothing at risk.
+
+**A test belongs to its claim.** `rev` is required, and must be the
+fingerprint of the claim the prediction is recorded on, as that claim reads
+when the prediction is made. A prediction cannot be moved or copied to another
+claim: `verify` reads that as removing it from one and recording a new one,
+with its outcome, on the other. A claim cannot be reworded or rewired while an
+accepted test of it is waiting for its outcome.
 
 **Who vouches.** Whoever is named on the bet (`bet.by`, written when a trust
 label is set), and every reviewer whose confirmation of the present wording
@@ -224,14 +234,22 @@ outcome. The engine has no clock: the status changes because the file did.
 picked. Cases that rest on the same source count once. The outcome is not
 typed: it follows from `found`.
 
-**Withdrawing.** A prediction is never deleted. To withdraw one, record the
-outcome `void` with a `note`. Withdrawals are counted on the setter's record.
+**Withdrawing.** A prediction is never deleted. Its setter, and nobody else,
+can withdraw it by recording the outcome `void` with a `note`. A withdrawal is
+counted on the setter's record, counts against them in their worst-case score,
+and is shown on the claim when the test had been accepted.
+
+**Dates.** `made`, `due`, `resolved` and the date of an overdue marker are
+written as YYYY-MM-DD. `verify` checks each against the date of the commit
+that records it, give or take two days. A commit's date is set by whoever
+makes the commit, so this ties the dates together and does not prove them.
 
 The engine reports:
 
 - **test-failed**: a failed test knocked the claim out;
 - **test-against**: a failed test that counts only as evidence against;
 - **test-overdue**: an accepted test is marked overdue and holds the claim back;
+- **test-withdrawn**: a test was withdrawn after a voucher had accepted it;
 - **test-unvouched**: a test is waiting for someone who vouches for the claim;
 - **test-soft**: `if_false` is missing, or a yes is less than twice as likely
   with the claim true;
@@ -241,11 +259,21 @@ The engine reports:
 - **test-one-case**: a claim about many cases is tested on one.
 
 `argmap verify` enforces the order. A prediction must arrive without its
-outcome, in the signer's own name. Its fixed fields (everything down to `rev`)
-never change, and it is never removed. An acceptance must come from someone
-who vouches for the claim, before the outcome. An outcome is recorded once, in
-the signer's name. With `--pull-request`, a prediction and its outcome may not
-arrive in the same range of commits.
+outcome, in the signer's own name, carrying the fingerprint of its claim. Its
+fixed fields (everything down to `rev`) never change, and it is never removed.
+An acceptance must come from someone who vouches for the claim, before the
+outcome. An outcome is recorded once, in the signer's name. With
+`--pull-request`, a prediction and its outcome may not arrive in the same
+range of commits.
+
+Statuses are worked out from the files as they stand. `verify` is what makes
+the records in them worth trusting, so a status means what it says only on
+history that `verify` passes.
+
+The fingerprint is the first 32 hex digits of a SHA-256 of the claim's text
+and support. Before version 0.4 it was 8 digits of a weaker hash, for which a
+second wording with the same value can be found in minutes. Reviews recorded
+with the short one are still read; nothing writes it any more.
 
 ## Reviews
 
@@ -263,8 +291,8 @@ claims:
 ```
 
 `rev` is written by the tools. It is a fingerprint of the claim's text and
-support, so a review of an older wording is recognised as stale and stops
-counting. A review written by hand without `rev` is treated as current. Each
+support (see the end of the Predictions section), so a review of an older
+wording is recognised as stale and stops counting. A review written by hand without `rev` is treated as current. Each
 reviewer's newest review replaces their earlier one.
 
 A claim's review state is `unreviewed`, `confirmed` (no current rejection),

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Editor, EditError } from '../src/edit.ts';
-import { analyze, claimRecord, impliedCredence, load, nextSteps, severity } from '../src/index.ts';
+import { analyze, claimRecord, claimRev, impliedCredence, load, nextSteps, severity } from '../src/index.ts';
 import type { Argument, Prediction } from '../src/index.ts';
 import { allPredictions, bucketOf, dueOn, records } from '../src/record.ts';
 
@@ -21,7 +21,9 @@ ${licencePresent}
     bet: assumed
 ${extra}`;
 
-const test60 = (rest: string, head = 'if_true: 0.97\n        if_false: 0.15'): string => `    text: At least 9 in 10 public repositories with over 1,000 stars carry a licence file.
+const TEXT = 'At least 9 in 10 public repositories with over 1,000 stars carry a licence file.';
+const REV = claimRev({ text: TEXT, because: [] });
+const test60 = (rest: string, head = 'if_true: 0.97\n        if_false: 0.15', rev = REV): string => `    text: ${TEXT}
     bet: { trust: assumed, by: ann }
     predictions:
       - says: Of 60 such repositories drawn at random, at least 51 have a licence file.
@@ -34,6 +36,7 @@ const test60 = (rest: string, head = 'if_true: 0.97\n        if_false: 0.15'): s
         by: ann
         made: 2026-11-14
         due: 2026-11-28
+        rev: ${rev}
 ${rest}`;
 
 const failed = `        outcome: no
@@ -87,7 +90,7 @@ test('a failed test the claim did not imply is evidence against', () => {
 });
 
 test('rewording a claim clears the knock-out, and the failure stays on its record', () => {
-  const source = base(test60(`        rev: 00000000\n${accepted}${failed}`));
+  const source = base(test60(accepted + failed, undefined, '0'.repeat(32)));
   const { arg } = read(source);
   assert.equal(analyze(arg).conclusion, 'stands');
   const record = claimRecord(arg.claims.get('licence-present') as NonNullable<ReturnType<Argument['claims']['get']>>);
@@ -108,12 +111,50 @@ test('an accepted test marked overdue holds the claim back until it is resolved'
 });
 
 test('a passed test changes no status and adds to what the claim has survived', () => {
-  const passed = `        outcome: yes\n        found: 55\n        resolved_by: model-x\n        resolved_kind: ai\n        source: https://example.org/sample-of-60.csv\n`;
+  const passed = `        outcome: yes\n        found: 55\n        resolved: 2026-11-20\n        resolved_by: model-x\n        resolved_kind: ai\n        source: https://example.org/sample-of-60.csv\n`;
   const { arg } = read(base(test60(accepted + passed)));
   assert.equal(analyze(arg).conclusion, 'stands');
   const record = claimRecord(arg.claims.get('licence-present') as NonNullable<ReturnType<Argument['claims']['get']>>);
   assert.equal(record.passed, 1);
-  assert.ok(Math.abs(record.bitsSurvived - Math.log2(0.97 / 0.15)) < 1e-9);
+  // Ann set the test on a claim she vouches for, so its hardness is her own figure and is kept apart from figures typed by others.
+  assert.ok(Math.abs(record.bitsOwn - Math.log2(0.97 / 0.15)) < 1e-9);
+  assert.deepEqual([record.bitsOthers, record.passedFromOthers, record.passedNoRisk], [0, 0, 0]);
+});
+
+test('a pass counts only where a failure would have knocked the claim out', () => {
+  const passed = `        outcome: yes\n        found: 55\n        resolved: 2026-11-20\n        resolved_by: model-x\n        resolved_kind: ai\n        source: https://example.org/sample-of-60.csv\n`;
+  const record = (source: string): ReturnType<typeof claimRecord> => claimRecord(read(source).arg.claims.get('licence-present') as NonNullable<ReturnType<Argument['claims']['get']>>);
+  // Nobody accepted it, or the claim was not taken to imply it: a failure would have cost nothing, so the pass shows nothing.
+  for (const free of [base(test60(passed)), base(test60(accepted + passed, 'if_true: 0.94\n        if_false: 0.15'))]) {
+    const r = record(free);
+    assert.deepEqual([r.passed, r.passedNoRisk, r.bitsOwn + r.bitsOthers], [0, 1, 0]);
+  }
+});
+
+test('withdrawing an accepted test is counted on the claim', () => {
+  const withdrawn = `        outcome: void\n        resolved: 2026-11-20\n        resolved_by: ann\n        note: The list of repositories was taken down.\n`;
+  const { arg, codes } = read(base(test60(accepted + withdrawn)));
+  assert.equal(analyze(arg).conclusion, 'stands');
+  assert.ok(codes.includes('test-withdrawn'));
+  assert.equal(claimRecord(arg.claims.get('licence-present') as NonNullable<ReturnType<Argument['claims']['get']>>).withdrawn, 1);
+});
+
+test('a pending test follows its claim through a reword', () => {
+  const overdue = '        overdue: { by: model-x, kind: ai, date: 2026-12-05 }\n';
+  const { arg, codes } = read(base(test60(accepted + overdue, undefined, '0'.repeat(32))));
+  assert.equal(analyze(arg).statuses.get('licence-present'), 'contested');
+  assert.ok(codes.includes('test-overdue'));
+});
+
+test('a prediction needs its fingerprint and real dates, and is recorded once', () => {
+  assert.match(errorsOf(base(test60('').replace(/        rev: .*\n/, '')))[0] ?? '', /needs "rev"/);
+  assert.match(errorsOf(base(test60('').replace('made: 2026-11-14', 'made: soon')))[0] ?? '', /must be dates written as YYYY-MM-DD/);
+  assert.match(errorsOf(base(test60('').replace('due: 2026-11-28', 'due: 2026-11-01')))[0] ?? '', /due on or after made/);
+  assert.match(errorsOf(base(test60('        overdue: { by: model-x, kind: ai }\n')))[0] ?? '', /an overdue marker needs its date/);
+  assert.match(errorsOf(base(test60('        overdue: { by: model-x, kind: ai, date: 2026-11-20 }\n')))[0] ?? '', /after the due date/);
+  assert.match(errorsOf(base(test60(failed.replace('        resolved: 2026-11-20\n', ''))))[0] ?? '', /needs "resolved"/);
+  const twice = base(test60('')).replace(/(      - says: [\s\S]*?rev: \w+\n)/, '$1$1');
+  assert.match(errorsOf(twice)[0] ?? '', /is the same prediction as an earlier one/);
 });
 
 test('the outcome of a sampled test follows from the count', () => {
@@ -155,6 +196,7 @@ claims:
         by: ann
         made: 2026-11-14
         due: 2026-12-02
+        rev: ${claimRev({ text: 'Buses on the number 9 route usually arrive within five minutes of the timetable.', because: [] })}
         accepted: [{ by: ann }]
 `);
   assert.ok(one.codes.includes('test-one-case'));
@@ -189,6 +231,9 @@ test('the editor records a test, its acceptance and its outcome, each once', () 
     assert.ok(claim?.predictions.every((p) => p.rev !== undefined && p.ifTrue === 1));
 
     assert.throws(() => new Editor(path).accept('licence-present', 2, { by: 'model-x', kind: 'ai' }), /does not vouch for "licence-present"/);
+    // While an accepted test is waiting, the claim cannot be reworded out from under it, and only its setter can withdraw it.
+    assert.throws(() => new Editor(path).reword('licence-present', 'Some repositories carry a licence file.'), /accepted test waiting for its outcome \(test 1\)/);
+    assert.throws(() => new Editor(path).resolve('licence-present', 1, { outcome: 'void', note: 'Changed my mind.', by: 'model-x', kind: 'ai' }), /Only ann, who set that prediction, can withdraw it/);
     assert.throws(() => new Editor(path).markOverdue('licence-present', 1, { by: 'model-x', kind: 'ai' }), /not overdue/);
     assert.throws(() => new Editor(path).resolve('licence-present', 1, { outcome: 'yes', found: 47, source: 'x', by: 'model-x', kind: 'ai' }), /is a no, not a yes/);
     assert.throws(() => new Editor(path).resolve('licence-present', 1, { found: 47, by: 'model-x', kind: 'ai' }), /needs a source/);
@@ -246,14 +291,13 @@ const made = (i: number, p: number, outcome: 'yes' | 'no' | undefined, more: Par
   },
 });
 
-test('a record is scored per kind of prediction, against the setter\'s own base rate, and at its worst', () => {
+test('a record is scored per kind of prediction, and at its worst', () => {
   // Ten lookups at 90%, nine of which came out yes: well calibrated, and no better than always saying 90%.
   const safe = Array.from({ length: 10 }, (_, i) => made(i, 0.9, i === 0 ? 'no' : 'yes'));
   const [ann] = records([...safe, made(10, 0.9, undefined), made(11, 0.6, 'yes', { type: 'forecast', made: '2026-01-01', resolved: '2026-06-01' })]);
   const lookups = ann?.buckets[0];
   assert.deepEqual([lookups?.scored, lookups?.open], [10, 1]);
   assert.ok(Math.abs((lookups?.brier as number) - 0.09) < 1e-9);
-  assert.ok(Math.abs(lookups?.skill as number) < 1e-9);
   // The open one, counted as if it went against her: (0.09 * 10 + 0.81) / 11.
   assert.ok(Math.abs((lookups?.worst as number) - 1.71 / 11) < 1e-9);
   // One forecast is too few to score, and it is not pooled with the lookups.
@@ -262,8 +306,28 @@ test('a record is scored per kind of prediction, against the setter\'s own base 
   assert.deepEqual([ann?.resolvedBySelf, ann?.resolvedByOthers, ann?.set], [5, 6, 12]);
   assert.equal(ann?.bits, 1);
 
-  // Someone who tells the yeses from the noes scores well on skill.
-  const sharp = Array.from({ length: 10 }, (_, i) => made(i, i < 5 ? 0.9 : 0.1, i < 5 ? 'yes' : 'no'));
-  assert.ok(((records(sharp)[0]?.buckets[0]?.skill as number) ?? 0) > 0.9);
+  // A withdrawn prediction is not scored, and counts against its setter in the worst case like an open one.
+  const [withdrew] = records([...safe, { ...made(10, 0.9, undefined), prediction: { ...made(10, 0.9, undefined).prediction, outcome: 'void' as const, note: 'why' } }]);
+  assert.deepEqual([withdrew?.buckets[0]?.scored, withdrew?.withdrawn], [10, 1]);
+  assert.ok(Math.abs((withdrew?.buckets[0]?.worst as number) - 1.71 / 11) < 1e-9);
   assert.equal(bucketOf(made(1, 0.5, undefined, { type: 'forecast', made: '2026-01-01', due: '2027-06-01' }).prediction), 'Forecasts, over a year');
+});
+
+test('the fingerprint tells apart two wordings that the old short one confused', async () => {
+  const { createHash } = await import('node:crypto');
+  const { sha256Hex } = await import('../src/sha256.ts');
+  for (const text of ['', 'abc', 'a'.repeat(55), 'a'.repeat(56), 'a'.repeat(64), `é☃ ${'x'.repeat(1000)}`]) {
+    assert.equal(sha256Hex(text), createHash('sha256').update(text).digest('hex'));
+  }
+  const { legacyRev, reviewSummary } = await import('../src/index.ts');
+  // Found by the reviewer in 300,000 tries: one 8-digit fingerprint, two claims.
+  const one = { text: 'Some shops on this  road  are open  before 9am.', because: [] };
+  const two = { text: 'Each  shop  along this  road opens before 6am .', because: [] };
+  assert.equal(legacyRev(one), legacyRev(two));
+  assert.notEqual(claimRev(one), claimRev(two));
+  assert.equal(claimRev(one).length, 32);
+  // A review recorded before the change, with the short fingerprint, still counts for the wording it judged.
+  const claim = { id: 'c', label: 'c', origin: '', evidence: [], predictions: [], ...one, reviews: [{ by: 'ann', kind: 'person' as const, verdict: 'confirm' as const, rev: legacyRev(one) }] };
+  assert.equal(reviewSummary(claim).state, 'confirmed');
+  assert.equal(reviewSummary({ ...claim, text: 'Reworded.' }).state, 'unreviewed');
 });

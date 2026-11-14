@@ -5,6 +5,7 @@ import { git, gitBuffer, refExists, tryGit } from './git.ts';
 import { parseFile } from './parse.ts';
 import type { RawFile } from './parse.ts';
 import { vouchers } from './predict.ts';
+import { claimRev } from './review.ts';
 import type { Prediction, Signed } from './types.ts';
 
 export const SIGNERS_FILE = 'allowed_signers';
@@ -201,17 +202,23 @@ function recordsOf(file: RawFile | undefined): { reviews: string[]; evidence: st
 
 /** A prediction as verify sees it: the part that may never change, and the parts that are added later. */
 interface Tracked {
-  /** Everything fixed when the prediction is made. Two predictions with the same key are the same prediction. */
+  /** The claim it is on and everything fixed when it is made. Two predictions with the same key are the same prediction. */
   key: string;
   claim: string;
   says: string;
   by: string;
   kind: string;
+  made: string;
   due: string;
+  /** The fingerprint it carries, and the fingerprint of its claim in this version of the file. */
+  rev: string;
+  claimRev: string;
   accepted: Signed[];
   overdue?: Signed;
   /** The outcome and everything recorded with it, as one string. */
   outcome?: string;
+  voided: boolean;
+  resolved?: string;
   resolvedBy?: string;
   resolvedKind?: string;
   confirmed: Signed[];
@@ -219,19 +226,27 @@ interface Tracked {
   vouchers: string[];
 }
 
-const fixedKey = (p: Prediction): string => JSON.stringify([p.says, p.how, p.type, p.p, p.ifTrue, p.ifFalse ?? null, p.sample ?? null, p.needs ?? null, p.by, p.kind, p.made, p.due, p.rev ?? null]);
+/**
+ * A prediction belongs to its claim. The claim's id is part of the key, so a
+ * test cannot be carried from one claim to another: that reads as removing it
+ * here and recording a new one there, and both are refused.
+ */
+const fixedKey = (claim: string, p: Prediction): string =>
+  JSON.stringify([claim, p.says, p.how, p.type, p.p, p.ifTrue, p.ifFalse ?? null, p.sample ?? null, p.needs ?? null, p.by, p.kind, p.made, p.due, p.rev ?? null]);
 
 function track(file: RawFile | undefined, into: Map<string, Tracked>): void {
   if (!file) return;
   for (const claim of file.claims.values()) {
     const backers = vouchers(claim);
+    const rev = claimRev(claim);
     for (const p of claim.predictions) {
-      const key = fixedKey(p);
+      const key = fixedKey(claim.id, p);
       const seen = into.get(key);
-      const one: Tracked = { key, claim: claim.id, says: p.says, by: p.by, kind: p.kind, due: p.due, accepted: [...p.accepted], confirmed: [...p.confirmed], vouchers: backers };
+      const one: Tracked = { key, claim: claim.id, says: p.says, by: p.by, kind: p.kind, made: p.made, due: p.due, rev: p.rev ?? '', claimRev: rev, accepted: [...p.accepted], confirmed: [...p.confirmed], voided: p.outcome === 'void', vouchers: backers };
       if (p.overdue) one.overdue = p.overdue;
       if (p.outcome !== undefined) {
         one.outcome = JSON.stringify([p.outcome, p.found ?? null, p.resolved ?? null, p.resolvedBy ?? null, p.resolvedKind ?? null, p.source ?? null, p.note ?? null]);
+        if (p.resolved) one.resolved = p.resolved;
         if (p.resolvedBy) one.resolvedBy = p.resolvedBy;
         if (p.resolvedKind) one.resolvedKind = p.resolvedKind;
       }
@@ -243,16 +258,21 @@ function track(file: RawFile | undefined, into: Map<string, Tracked>): void {
       for (const a of one.accepted) if (!seen.accepted.some((x) => x.by === a.by)) seen.accepted.push(a);
       for (const c of one.confirmed) if (!seen.confirmed.some((x) => x.by === c.by)) seen.confirmed.push(c);
       if (!seen.overdue && one.overdue) seen.overdue = one.overdue;
-      if (seen.outcome === undefined && one.outcome !== undefined) Object.assign(seen, { outcome: one.outcome, resolvedBy: one.resolvedBy, resolvedKind: one.resolvedKind });
+      if (seen.outcome === undefined && one.outcome !== undefined) Object.assign(seen, { outcome: one.outcome, voided: one.voided, resolved: one.resolved, resolvedBy: one.resolvedBy, resolvedKind: one.resolvedKind });
     }
   }
 }
 
-const vouchedBy = (file: RawFile | undefined): Map<string, string> => {
-  const out = new Map<string, string>();
-  if (file) for (const claim of file.claims.values()) if (claim.bet?.by) out.set(claim.id, claim.bet.by);
+/** The trust label on each bet in a file: the level, and whose name is on it. */
+const labels = (file: RawFile | undefined): Map<string, { trust: string; by?: string }> => {
+  const out = new Map<string, { trust: string; by?: string }>();
+  if (file) for (const claim of file.claims.values()) if (claim.bet) out.set(claim.id, claim.bet.by ? { trust: claim.bet.trust, by: claim.bet.by } : { trust: claim.bet.trust });
   return out;
 };
+
+const DAY = 24 * 60 * 60 * 1000;
+/** A date written in a record must be within two days of the commit that records it. The slack covers time zones. */
+const nearDay = (typed: string | undefined, commitDay: string): boolean => typed !== undefined && Math.abs(Date.parse(typed) - Date.parse(commitDay)) <= 2 * DAY;
 
 /**
  * The rules that make a prediction worth scoring. The guess must come first:
@@ -260,7 +280,7 @@ const vouchedBy = (file: RawFile | undefined): Map<string, string> => {
  * afterwards. Each later part (an acceptance, an overdue marker, the outcome, a
  * second name on it) is added once, in the signer's own name.
  */
-function predictionProblems(before: Map<string, Tracked>, after: Map<string, Tracked>, signer: Signer, path: string): string[] {
+function predictionProblems(before: Map<string, Tracked>, after: Map<string, Tracked>, signer: Signer, path: string, commitDay: string): string[] {
   const problems: string[] = [];
   const mine = (who: { by: string; kind: string }, what: string): void => {
     if (who.by !== signer.name) problems.push(`${path}: ${what} is recorded as by "${who.by}", but the commit was signed by ${signer.principal}`);
@@ -274,11 +294,16 @@ function predictionProblems(before: Map<string, Tracked>, after: Map<string, Tra
     const name = `the prediction on "${now.claim}" ("${now.says}")`;
     if (!old) {
       mine(now, name);
+      if (now.rev !== now.claimRev) problems.push(`${path}: ${name} does not carry the fingerprint of the claim it is recorded on. A prediction tests the claim as it reads when the prediction is made.`);
+      if (!nearDay(now.made, commitDay)) problems.push(`${path}: ${name} says it was made on ${now.made}, but the commit that records it is dated ${commitDay}.`);
       if (now.outcome !== undefined) problems.push(`${path}: ${name} arrived together with its outcome. The prediction must be recorded first, in an earlier commit.`);
       if (now.overdue) problems.push(`${path}: ${name} arrived already marked overdue.`);
       if (now.confirmed.length > 0) problems.push(`${path}: ${name} arrived with its outcome already confirmed.`);
     }
     const had = old ?? { accepted: [], confirmed: [] as Signed[], overdue: undefined, outcome: undefined };
+    if (old && old.outcome === undefined && old.accepted.length > 0 && old.rev === old.claimRev && now.rev !== now.claimRev) {
+      problems.push(`${path}: "${now.claim}" was reworded or rewired while an accepted test of it was waiting for its outcome ("${now.says}"). Record what was found first.`);
+    }
     for (const gone of had.accepted.filter((a) => !now.accepted.some((x) => x.by === a.by))) problems.push(`${path}: ${gone.by}'s acceptance of ${name} was removed.`);
     for (const a of now.accepted.filter((x) => !had.accepted.some((y) => y.by === x.by))) {
       mine(a, `an acceptance of ${name}`);
@@ -288,10 +313,15 @@ function predictionProblems(before: Map<string, Tracked>, after: Map<string, Tra
     if (had.overdue && JSON.stringify(had.overdue) !== JSON.stringify(now.overdue)) problems.push(`${path}: the overdue marker on ${name} was changed or removed.`);
     if (!had.overdue && now.overdue) {
       mine(now.overdue, `the overdue marker on ${name}`);
-      if (now.overdue.date !== undefined && now.overdue.date <= now.due) problems.push(`${path}: ${name} is marked overdue on ${now.overdue.date}, but it is due on ${now.due}.`);
+      if (now.overdue.date === undefined || now.overdue.date <= now.due) problems.push(`${path}: ${name} is marked overdue${now.overdue.date ? ` on ${now.overdue.date}` : ' with no date'}, but it is due on ${now.due}.`);
+      else if (!nearDay(now.overdue.date, commitDay)) problems.push(`${path}: the overdue marker on ${name} is dated ${now.overdue.date}, but the commit that records it is dated ${commitDay}.`);
     }
     if (had.outcome !== undefined && had.outcome !== now.outcome) problems.push(`${path}: the outcome of ${name} was changed or removed. An outcome is recorded once.`);
-    if (old && had.outcome === undefined && now.outcome !== undefined) mine({ by: now.resolvedBy ?? '', kind: now.resolvedKind ?? '' }, `the outcome of ${name}`);
+    if (had.outcome === undefined && now.outcome !== undefined) {
+      if (old) mine({ by: now.resolvedBy ?? '', kind: now.resolvedKind ?? '' }, `the outcome of ${name}`);
+      if (!nearDay(now.resolved, commitDay)) problems.push(`${path}: the outcome of ${name} is dated ${now.resolved ?? 'nothing'}, but the commit that records it is dated ${commitDay}.`);
+      if (now.voided && now.resolvedBy !== now.by) problems.push(`${path}: ${now.resolvedBy} withdrew ${name}, which ${now.by} set. Only its setter can withdraw a prediction; anyone can record what was found.`);
+    }
     for (const gone of had.confirmed.filter((c) => !now.confirmed.some((x) => x.by === c.by))) problems.push(`${path}: ${gone.by}'s confirmation of the outcome of ${name} was removed.`);
     for (const c of now.confirmed.filter((x) => !had.confirmed.some((y) => y.by === x.by))) {
       mine(c, `a confirmation of the outcome of ${name}`);
@@ -364,49 +394,69 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
       // Predictions are followed across every file the commit touches, so moving a claim to another file does not look like deleting its tests.
       const hadPredictions = new Map<string, Tracked>();
       const hasPredictions = new Map<string, Tracked>();
+      const commitDay = git(root, ['log', '-1', '--format=%cI', commit]).slice(0, 10);
       for (const path of changed) {
         const read = (rev: string): RawFile | undefined => {
           const text = tryGit(root, ['show', `${rev}:${path}`]);
           return text === undefined ? undefined : parseFile(text, path);
         };
         const now = read(commit);
-        const named = new Map<string, string>();
-        for (const parent of parents) {
-          const was = read(parent);
-          track(was, hadPredictions);
-          for (const [id, who] of vouchedBy(was)) named.set(id, who);
-        }
+        const was = parents.map(read);
+        for (const file of was) track(file, hadPredictions);
         track(now, hasPredictions);
-        // Naming who set a trust label makes that name vouch for the claim, so a signer can only put down their own.
-        for (const [id, who] of vouchedBy(now)) {
-          if (named.get(id) !== who && who !== signer.name) check.problems.push(`${path}: the trust label on "${id}" is recorded as set by "${who}", but the commit was signed by ${signer.principal}`);
+        for (const issue of now?.issues ?? []) if (issue.code === 'prediction-shape') check.problems.push(`${path}: ${issue.message}`);
+
+        // A trust label carries the name of whoever set it, and that name vouches for the bet. A signer can put down
+        // only their own name, and cannot change or strip a label that carries someone else's without taking it over.
+        const before = was.map(labels);
+        for (const [id, label] of labels(now)) {
+          if (before.length > 0 && before.some((b) => b.get(id)?.trust === label.trust && b.get(id)?.by === label.by)) continue;
+          const earlier = before[0]?.get(id);
+          if (label.by !== undefined && label.by !== signer.name) {
+            check.problems.push(`${path}: the trust label on "${id}" is recorded as set by "${label.by}", but the commit was signed by ${signer.principal}`);
+          } else if (earlier?.by !== undefined && earlier.by !== signer.name && label.by !== signer.name) {
+            check.problems.push(`${path}: the trust label on "${id}" carried ${earlier.by}'s name, and ${signer.principal} changed it without putting their own name on it`);
+          }
         }
+
+        const after = recordsOf(now);
+        const earlierRecords = was.map(recordsOf);
         // What was already on record in any parent is not new, so a merge answers only for what it adds itself.
-        const before = { reviews: [] as string[], evidence: [] as string[], log: [] as string[] };
-        for (const parent of parents) {
-          const had = recordsOf(read(parent));
-          before.reviews.push(...had.reviews);
-          before.evidence.push(...had.evidence);
-          before.log.push(...had.log);
-        }
-        const after = recordsOf(read(commit));
-        for (const item of added(before.reviews, after.reviews)) {
+        const known = (kind: 'reviews' | 'evidence' | 'log'): string[] => earlierRecords.flatMap((r) => r[kind]);
+        // What a commit takes away: on record in every parent, and gone now. A signer can take back only their own.
+        const gone = (kind: 'reviews' | 'evidence' | 'log'): string[] => {
+          const perParent = earlierRecords.map((r) => added(after[kind], r[kind]));
+          return (perParent[0] ?? []).filter((item) => perParent.every((list) => list.includes(item)));
+        };
+        for (const item of added(known('reviews'), after.reviews)) {
           const [claim, by, kind] = JSON.parse(item) as [string, string, string];
           if (by !== signer.name) check.problems.push(`${path}: a review of "${claim}" is recorded as by "${by}", but the commit was signed by ${signer.principal}`);
           else if (signer.kind !== 'unknown' && kind !== signer.kind) {
             check.problems.push(`${path}: the review of "${claim}" says its reviewer is ${kind === 'ai' ? 'an AI' : 'a person'}, but ${signer.principal} is listed as ${signer.kind === 'ai' ? 'an AI' : 'a person'}`);
           }
         }
-        for (const item of added(before.evidence, after.evidence)) {
+        for (const item of added(known('evidence'), after.evidence)) {
           const [claim, by] = JSON.parse(item) as [string, string];
           if (by !== signer.name) check.problems.push(`${path}: evidence on "${claim}" is recorded as added by "${by || 'nobody'}", but the commit was signed by ${signer.principal}`);
         }
-        for (const item of added(before.log, after.log)) {
+        for (const item of added(known('log'), after.log)) {
           const [by] = JSON.parse(item) as [string];
           if (by !== signer.name) check.problems.push(`${path}: a log entry is recorded as by "${by}", but the commit was signed by ${signer.principal}`);
         }
+        for (const item of gone('reviews')) {
+          const [claim, by] = JSON.parse(item) as [string, string];
+          if (by !== signer.name) check.problems.push(`${path}: ${by}'s review of "${claim}" was changed or removed by ${signer.principal}. A signer can take back only what is in their own name.`);
+        }
+        for (const item of gone('evidence')) {
+          const [claim, by] = JSON.parse(item) as [string, string];
+          if (by !== '' && by !== signer.name) check.problems.push(`${path}: evidence on "${claim}" added by ${by} was changed or removed by ${signer.principal}. A signer can take back only what is in their own name.`);
+        }
+        for (const item of gone('log')) {
+          const [by] = JSON.parse(item) as [string];
+          if (by !== signer.name) check.problems.push(`${path}: a log entry by ${by} was changed or removed by ${signer.principal}. The log is a record, and a signer can take back only what is in their own name.`);
+        }
       }
-      check.problems.push(...predictionProblems(hadPredictions, hasPredictions, signer, changed.length === 1 ? (changed[0] as string) : 'predictions'));
+      check.problems.push(...predictionProblems(hadPredictions, hasPredictions, signer, changed.length === 1 ? (changed[0] as string) : 'predictions', commitDay));
       for (const [key, now] of hasPredictions) {
         if (!hadPredictions.has(key)) born.set(key, commit);
         else if (options.separate && now.outcome !== undefined && hadPredictions.get(key)?.outcome === undefined && born.has(key)) {

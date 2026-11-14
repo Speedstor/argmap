@@ -171,6 +171,19 @@ export class Editor {
     return path;
   }
 
+  /**
+   * A claim cannot be reworded or rewired while an accepted test of it is
+   * waiting for an outcome: that would be a way out of the test. Record what
+   * was found first, or have its setter withdraw it, which is counted.
+   */
+  private refuseWhileTested(id: string): void {
+    const claim = this.loadNow().argument?.claims.get(id);
+    const pending = claim?.predictions.findIndex((p) => p.outcome === undefined && p.accepted.length > 0) ?? -1;
+    if (pending !== -1) {
+      throw new EditError(`"${id}" has an accepted test waiting for its outcome (test ${pending + 1}). Record what was found first; then the claim can be changed.`);
+    }
+  }
+
   /* ---------- Operations ---------- */
 
   addClaim(claim: NewClaim, into?: string): this {
@@ -184,6 +197,7 @@ export class Editor {
    */
   refine(id: string, options: { parts?: NewClaim[]; use?: string[]; mode?: 'all' | 'any'; text?: string; into?: string }): this {
     const path = this.mustLocate(id);
+    this.refuseWhileTested(id);
     const parts = options.parts ?? [];
     const use = options.use ?? [];
     if (parts.length + use.length === 0) throw new EditError('Refining needs at least one part: a new claim, or an existing one to reuse.');
@@ -210,6 +224,7 @@ export class Editor {
   setSupport(id: string, because: string[][]): this {
     const path = this.mustLocate(id);
     if (!because.some((g) => g.length > 0)) throw new EditError('Support cannot be empty. A claim with no support must be a bet.');
+    this.refuseWhileTested(id);
     for (const member of because.flat()) this.mustLocate(member);
     const doc = this.openClaim(path, id);
     doc.deleteIn(['claims', id, 'bet']);
@@ -317,6 +332,7 @@ export class Editor {
     if (!outcome || !(OUTCOMES as readonly string[]).includes(outcome)) throw new EditError(`The outcome must be ${OUTCOMES.join(', ')}.`);
     if (outcome !== 'void' && !result.source?.trim()) throw new EditError('An outcome needs a source that others can open.');
     if (outcome === 'void' && !result.note?.trim()) throw new EditError('Withdrawing a prediction needs a note saying why.');
+    if (outcome === 'void' && result.by !== found.by) throw new EditError(`Only ${found.by}, who set that prediction, can withdraw it. Anyone can record what was found.`);
     doc.setIn([...at, 'outcome'], doc.createNode(outcome));
     if (result.found !== undefined && outcome !== 'void') doc.setIn([...at, 'found'], result.found);
     doc.setIn([...at, 'resolved'], today());
@@ -363,6 +379,7 @@ export class Editor {
   reword(id: string, text: string): this {
     if (text.trim() === '') throw new EditError('The new wording is empty.');
     const path = this.mustLocate(id);
+    this.refuseWhileTested(id);
     this.openClaim(path, id).setIn(['claims', id, 'text'], text.trim());
     return this;
   }

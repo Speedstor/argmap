@@ -66,13 +66,7 @@ export interface Bucket {
   open: number;
   /** Mean squared gap between the chance given and what happened. 0 is perfect; always saying 50% gets 0.25. */
   brier?: number;
-  /**
-   * How much better than always giving your own usual answer: 1 is perfect, 0 is
-   * no better, below 0 is worse. A diet of safe predictions scores near 0 here
-   * however good its Brier looks. Absent when every outcome was the same.
-   */
-  skill?: number;
-  /** The Brier score if every open prediction went against the setter. Abandoning a prediction does not hide it. */
+  /** The Brier score if every open and every withdrawn prediction went against the setter. Abandoning or withdrawing one does not hide it. */
   worst?: number;
   calibration?: CalibrationRow[];
 }
@@ -101,15 +95,13 @@ const mean = (values: number[]): number => values.reduce((a, b) => a + b, 0) / v
 function scoreBucket(name: BucketName, list: Prediction[]): Bucket {
   const scored = list.filter((p) => p.outcome === 'yes' || p.outcome === 'no');
   const open = list.filter((p) => p.outcome === undefined);
+  const pending = list.filter((p) => p.outcome === undefined || p.outcome === 'void');
   const bucket: Bucket = { name, scored: scored.length, open: open.length };
   if (scored.length < MIN_SCORED) return bucket;
   const hit = (p: Prediction): number => (p.outcome === 'yes' ? 1 : 0);
   const errors = scored.map((p) => (p.p - hit(p)) ** 2);
   bucket.brier = mean(errors);
-  const base = mean(scored.map(hit));
-  const reference = base * (1 - base);
-  if (reference > 0) bucket.skill = 1 - bucket.brier / reference;
-  if (open.length > 0) bucket.worst = mean([...errors, ...open.map((p) => Math.max(p.p, 1 - p.p) ** 2)]);
+  if (pending.length > 0) bucket.worst = mean([...errors, ...pending.map((p) => Math.max(p.p, 1 - p.p) ** 2)]);
   if (scored.length >= MIN_SCORED * 2) {
     bucket.calibration = [];
     for (let low = 0; low < 100; low += 20) {
@@ -121,7 +113,12 @@ function scoreBucket(name: BucketName, list: Prediction[]): Bucket {
   return bucket;
 }
 
-/** What each name has on record, by name. Nothing here is rolled into a single number, and nothing sets a trust label. */
+/**
+ * What each name has on record, by name. Nothing here is rolled into a single
+ * number, and nothing sets a trust label. There is no skill score: any score
+ * worked out from questions the setter picked can be padded with sure things,
+ * a yes and a no in equal number.
+ */
 export function records(entries: Entry[]): NameRecord[] {
   const byName = new Map<string, Prediction[]>();
   for (const { prediction } of entries) byName.set(prediction.by, [...(byName.get(prediction.by) ?? []), prediction]);
@@ -152,7 +149,10 @@ const round = (n: number): string => n.toFixed(2);
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export function formatRecord(record: NameRecord): string {
-  const out: string[] = [`${record.name} (${record.kind === 'ai' ? 'AI' : 'person'}): ${plural(record.set, 'prediction')} set`];
+  const out: string[] = [
+    `${record.name} (${record.kind === 'ai' ? 'AI' : 'person'}): ${plural(record.set, 'prediction')} set`,
+    '  These are questions the setter chose. A good score can come from choosing easy ones, so read it next to how hard the tests were.',
+  ];
   for (const b of record.buckets) {
     if (b.scored + b.open === 0) {
       out.push(`  ${b.name}: no record.`);
@@ -164,12 +164,7 @@ export function formatRecord(record: NameRecord): string {
       continue;
     }
     out.push(`      Brier score ${round(b.brier)}. 0 is perfect, and always saying 50% gets 0.25.`);
-    out.push(
-      b.skill === undefined
-        ? '      Skill: cannot be told, because every outcome was the same.'
-        : `      Skill ${round(b.skill)} against always giving their own usual answer. 0 is no better, 1 is perfect.`,
-    );
-    if (b.worst !== undefined) out.push(`      If every open prediction went against them: Brier score ${round(b.worst)}.`);
+    if (b.worst !== undefined) out.push(`      If every open or withdrawn prediction went against them: Brier score ${round(b.worst)}.`);
     if (b.calibration) {
       out.push('      Calibration (chance given: how often it came out yes):');
       for (const row of b.calibration) out.push(`        ${row.range}: said ${Math.round(row.said * 100)}%, came out yes ${Math.round(row.cameTrue * 100)}% of ${row.count}`);

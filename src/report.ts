@@ -103,6 +103,7 @@ export function formatReport(loaded: Loaded, knocked: ReadonlySet<string> = new 
   );
   const tests = testability(arg);
   out.push(`Tests: ${tests.tested} of ${tests.bets} bets have a test of their present wording. ${tests.passed} passed, ${tests.failed} failed, ${tests.open} open.`);
+  if (tests.unvouched > 0) out.push(`       ${tests.unvouched} of the bets have nobody vouching for them, so no test can knock them out.`);
   out.push(
     `Reviews: ${count('confirmed')} confirmed, ${count('rejected')} rejected, ${count('split')} split, ${count('unreviewed')} unreviewed.`,
     '',

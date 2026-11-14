@@ -149,6 +149,7 @@ function parseSigned(raw: unknown): Signed | undefined {
   return out;
 }
 
+const isDay = (text: string | undefined): text is string => text !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(text) && !Number.isNaN(Date.parse(text));
 const isChance = (v: unknown, allowOne: boolean): v is number => typeof v === 'number' && v > 0 && (allowOne ? v <= 1 : v < 1);
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
@@ -171,6 +172,9 @@ function parsePredictions(raw: unknown, id: string, issues: Issue[]): Prediction
     const due = asText(entry['due']);
     if (!says || !how) return bad('needs "says" (what will be found) and "how" (how a yes is told from a no).');
     if (!by || !made || !due) return bad('needs "by", "made" and "due".');
+    if (!isDay(made) || !isDay(due) || due < made) return bad('made and due must be dates written as YYYY-MM-DD, with due on or after made.');
+    const rev = asText(entry['rev']);
+    if (!rev) return bad('needs "rev", the fingerprint of the claim wording it tests. The tools write it; "argmap predict" is the way to add a prediction.');
     const type = entry['type'];
     if (!(PREDICTION_TYPES as readonly unknown[]).includes(type)) return bad(`type must be ${PREDICTION_TYPES.join(' or ')}.`);
     const kind = entry['kind'] ?? 'person';
@@ -181,7 +185,7 @@ function parsePredictions(raw: unknown, id: string, issues: Issue[]): Prediction
     if (!isChance(ifTrue, true)) return bad('if_true must be a number above 0 and at most 1.');
     const ifFalse = entry['if_false'];
     if (ifFalse !== undefined && !isChance(ifFalse, false)) return bad('if_false must be a number above 0 and below 1.');
-    const item: Prediction = { says, how, type: type as PredictionType, p, ifTrue, by, kind: kind as ReviewerKind, made, due, accepted: [], confirmed: [] };
+    const item: Prediction = { says, how, type: type as PredictionType, p, ifTrue, by, kind: kind as ReviewerKind, made, due, rev, accepted: [], confirmed: [] };
     if (ifFalse !== undefined) item.ifFalse = ifFalse;
     const sample = entry['sample'];
     const needs = entry['needs'];
@@ -192,8 +196,6 @@ function parsePredictions(raw: unknown, id: string, issues: Issue[]): Prediction
       item.sample = sample;
       item.needs = needs;
     }
-    const rev = asText(entry['rev']);
-    if (rev) item.rev = rev;
     for (const key of ['accepted', 'confirmed'] as const) {
       const list = entry[key];
       if (list === undefined || list === null) continue;
@@ -207,6 +209,7 @@ function parsePredictions(raw: unknown, id: string, issues: Issue[]): Prediction
     if (entry['overdue'] !== undefined && entry['overdue'] !== null) {
       const overdue = parseSigned(entry['overdue']);
       if (!overdue) return bad('overdue must be { by, kind, date }.');
+      if (!isDay(overdue.date) || overdue.date <= due) return bad(`an overdue marker needs its date, written as YYYY-MM-DD and after the due date (${due}).`);
       item.overdue = overdue;
     }
     const outcome = entry['outcome'];
@@ -224,7 +227,8 @@ function parsePredictions(raw: unknown, id: string, issues: Issue[]): Prediction
       const resolved = asText(entry['resolved']);
       const source = asText(entry['source']);
       const note = asText(entry['note']);
-      if (resolved) item.resolved = resolved;
+      if (!isDay(resolved) || resolved < made) return bad('an outcome needs "resolved", the day it was recorded, written as YYYY-MM-DD and not before the prediction was made.');
+      item.resolved = resolved;
       if (source) item.source = source;
       if (note) item.note = note;
       const found = entry['found'];
@@ -240,6 +244,9 @@ function parsePredictions(raw: unknown, id: string, issues: Issue[]): Prediction
       if (item.outcome !== 'void' && !item.source) return bad('an outcome of yes or no needs a "source" that others can open.');
       if (item.outcome === 'void' && !item.note) return bad('a void outcome needs a "note" saying why the prediction was withdrawn.');
     }
+    // The same prediction written twice would be scored twice.
+    const same = (x: Prediction): boolean => x.says === item.says && x.by === item.by && x.made === item.made && x.due === item.due && x.p === item.p;
+    if (out.some(same)) return bad('is the same prediction as an earlier one on this claim. Each prediction is recorded once.');
     out.push(item);
   });
   return out;
