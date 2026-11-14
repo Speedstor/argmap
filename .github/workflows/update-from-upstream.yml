@@ -1,0 +1,65 @@
+# Keep a private copy of argmap up to date with the public repository.
+#
+# This file ships in the public repository so that every copy has it, but it
+# does nothing there: the public repository is the upstream. In a copy it runs
+# once a day, and from the Actions tab: Update from upstream > Run workflow.
+#
+# It only ever reads from the public repository and pushes to this copy. When
+# the update merges cleanly it lands on main and CI is asked to rebuild the
+# digest. When it conflicts with something changed here, the run fails, names
+# the files and changes nothing.
+#
+# Settings a copy can use (all optional):
+#   variable ARGMAP_UPSTREAM  the repository to follow, as owner/name
+#                             (default: Speedstor/argmap)
+#   secret SYNC_TOKEN         a token that may update workflows. Without it, an
+#                             update that changes a workflow file stops with
+#                             instructions, because GitHub's built-in token is
+#                             not allowed to push such a change.
+name: Update from upstream
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: update-from-upstream
+
+jobs:
+  update:
+    if: github.repository != (vars.ARGMAP_UPSTREAM || 'Speedstor/argmap')
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM: ${{ vars.ARGMAP_UPSTREAM || 'Speedstor/argmap' }}
+      HAS_SYNC_TOKEN: ${{ secrets.SYNC_TOKEN != '' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Merge the public main into this copy
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          before="$(git rev-parse HEAD)"
+          if [ "$HAS_SYNC_TOKEN" = "true" ]; then export ALLOW_WORKFLOW_CHANGES=1; fi
+          scripts/update-from-upstream.sh "https://github.com/${UPSTREAM}.git" main
+          if [ "$(git rev-parse HEAD)" != "$before" ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Push the update to this copy
+        if: steps.merge.outputs.changed == 'true'
+        run: git push origin HEAD:main
+
+      # A push made with the built-in token does not start other workflows, so ask for CI by name.
+      - name: Rebuild the digest
+        if: steps.merge.outputs.changed == 'true' && env.HAS_SYNC_TOKEN != 'true'
+        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main

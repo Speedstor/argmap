@@ -60,6 +60,45 @@ keys and what each name has on record.
 request and every push to `main`. From `main` it also writes the digest to the
 `digest` branch, so it can be read without cloning or installing anything.
 
+## Keep a private copy
+
+The tool is public; your arguments do not have to be. A private copy is an
+ordinary private repository that starts as a copy of this one and keeps
+receiving its updates. It cannot be a GitHub fork, because a fork of a public
+repository is always public.
+
+Create an empty private repository on GitHub, then:
+
+```sh
+git clone https://github.com/Speedstor/argmap && cd argmap
+git remote rename origin upstream
+git remote set-url --push upstream DISABLED     # this clone can never push to the public repo
+git remote add origin https://github.com/YOU/argmap-private
+git push -u origin main
+git push origin upstream/ideas:refs/heads/ideas  # optional: the notepads and their workflow
+```
+
+From then on:
+
+- **Your thinking goes in the copy**: new files under `arguments/` and
+  `claims/`, notepads on its `ideas` branch. Its CI writes its own `digest`
+  branch.
+- **Updates arrive by themselves.** `.github/workflows/update-from-upstream.yml`
+  merges the public `main` into the copy once a day, and from the Actions tab
+  (Update from upstream > Run workflow). In a clone, `npm run update` does the
+  same merge and leaves the push to you.
+- **Change tool files only in the public repository.** Then updates always
+  merge cleanly. If an update does conflict with something changed in the copy,
+  it stops, names the files and changes nothing.
+- **Nothing flows the other way.** The copy only reads from the public
+  repository. To offer a fix back, make it on a branch cut from `upstream/main`,
+  so it carries none of the copy's history.
+
+One limit: GitHub's built-in token may not push changes to workflow files. When
+an update contains one, the workflow stops and says so. Run `npm run update` in
+a clone and push, or give the copy a secret named `SYNC_TOKEN` holding a token
+that may update workflows.
+
 ## Working in rounds
 
 An argument starts coarse. Each round makes it finer:
@@ -238,7 +277,8 @@ These follow from the bets as written. None of them means "true".
 | `viewer/` | The interactive page, bundled by `scripts/build.mjs` |
 | `src/digest.ts` | The repository written out as Markdown, to read in one pass |
 | `.github/workflows/ci.yml` | Tests on every change; writes the digest to the `digest` branch from `main` |
-| `test/` | Engine, MCP server and digest tests |
+| `scripts/update-from-upstream.sh`, `.github/workflows/update-from-upstream.yml` | Bring a private copy up to date with this repository |
+| `test/` | Engine, MCP server, digest and update tests |
 
 Turning prose into an argument file is the one step that needs judgment (a
 person, or a language model whose draft a person corrects). Everything after

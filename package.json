@@ -14,7 +14,8 @@
     "argmap": "node bin/argmap.mjs",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "update": "bash scripts/update-from-upstream.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
