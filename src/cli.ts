@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { analyze, nextSteps, REVIEWER_KINDS, toYaml, VERDICTS } from './index.ts';
-import type { ReviewerKind, Verdict } from './index.ts';
+import { analyze, nextSteps, OUTCOMES, PREDICTION_TYPES, REVIEWER_KINDS, toYaml, VERDICTS } from './index.ts';
+import type { Outcome, PredictionType, ReviewerKind, Verdict } from './index.ts';
+import { allPredictions, dueOn, formatRecord, records } from './record.ts';
 import { Editor, EditError } from './edit.ts';
 import { formatIssues, formatKnock, formatReport, formatSteps, toJson } from './report.ts';
 import { addIdea, createNotepad, ideasFor, IdeasError } from './ideas.ts';
@@ -23,6 +24,21 @@ Usage
   argmap next   <file> [-n 5]       What to work on next, most valuable first
   argmap knock  <file> <id>...      What changes if these claims fail
   argmap review <file> <id> confirm|reject --by <name> [--ai] [--note <text>]
+  argmap predict <file> <id> --says <text> --how <text> --type lookup|forecast --p <chance>
+                 --if-false <chance> [--if-true <chance>] [--sample <n> --needs <k>]
+                 --due <YYYY-MM-DD> --by <name> [--ai]
+                                    Before checking a claim, record what you expect to find
+  argmap accept  <file> <id> <n> --by <name> [--ai]
+                                    Agree that a claim you vouch for implies test number n
+  argmap resolve <file> <id> <n> yes|no|void [--found <k>] --source <where> [--note <text>] --by <name> [--ai]
+                                    Record what was found. With a sample, give --found and leave out yes|no
+  argmap overdue <file> <id> <n> --by <name> [--ai]
+                                    Mark a test that is past due; the claim cannot stand until it is resolved
+  argmap confirm <file> <id> <n> --by <name> [--ai]
+                                    Put a second name to a recorded outcome
+  argmap due [--on <YYYY-MM-DD>] [--json]
+                                    Open predictions: those that have come due, then those to come
+  argmap record [<name>]            What each name's resolved predictions show
   argmap search <words>...          Find claims in the library and every argument
   argmap ideas  <file>              Show the notepads for an argument (read from the ideas branch)
   argmap notepad <file> [--claim <id>] --by <name>
@@ -142,6 +158,114 @@ async function main(argv: string[]): Promise<number> {
         if (e instanceof EditError) fail(e.message);
         throw e;
       }
+    }
+    case 'predict':
+    case 'accept':
+    case 'resolve':
+    case 'overdue':
+    case 'confirm': {
+      const id = rest[0];
+      const by = option(rest, '--by');
+      if (!file || !id || id.startsWith('--') || !by) fail(USAGE);
+      const who = { by, kind: rest.includes('--ai') ? REVIEWER_KINDS[1] : REVIEWER_KINDS[0] } satisfies { by: string; kind: ReviewerKind };
+      const number = (name: string): number | undefined => {
+        const raw = option(rest, name);
+        if (raw === undefined) return undefined;
+        if (raw.trim() === '' || Number.isNaN(Number(raw))) fail(`${name} needs a number.`);
+        return Number(raw);
+      };
+      try {
+        const editor = new Editor(file);
+        let note: string;
+        if (command === 'predict') {
+          const says = option(rest, '--says');
+          const how = option(rest, '--how');
+          const type = option(rest, '--type');
+          const p = number('--p');
+          const due = option(rest, '--due');
+          if (!says || !how || !(PREDICTION_TYPES as readonly unknown[]).includes(type) || p === undefined || !due) fail(USAGE);
+          const ifFalse = number('--if-false');
+          const ifTrue = number('--if-true');
+          const sample = number('--sample');
+          const needs = number('--needs');
+          editor.predict(id, {
+            says,
+            how,
+            type: type as PredictionType,
+            p,
+            due,
+            ...who,
+            ...(ifFalse !== undefined ? { ifFalse } : {}),
+            ...(ifTrue !== undefined ? { ifTrue } : {}),
+            ...(sample !== undefined ? { sample } : {}),
+            ...(needs !== undefined ? { needs } : {}),
+          });
+          note = `${Math.round(p * 100)}%: ${says}`;
+        } else {
+          const n = Number(rest[1]);
+          if (!Number.isInteger(n) || n < 1) fail(`Say which prediction on "${id}" by its number, counted from 1.`);
+          note = `test ${n}`;
+          if (command === 'accept') editor.accept(id, n, who);
+          else if (command === 'overdue') editor.markOverdue(id, n, who);
+          else if (command === 'confirm') editor.confirmOutcome(id, n, who);
+          else {
+            const word = rest[2];
+            const outcome = (OUTCOMES as readonly unknown[]).includes(word) ? (word as Outcome) : undefined;
+            const found = number('--found');
+            const source = option(rest, '--source');
+            const why = option(rest, '--note');
+            if (outcome === undefined && found === undefined) fail(USAGE);
+            editor.resolve(id, n, {
+              ...who,
+              ...(outcome !== undefined ? { outcome } : {}),
+              ...(found !== undefined ? { found } : {}),
+              ...(source ? { source } : {}),
+              ...(why ? { note: why } : {}),
+            });
+            note = `test ${n}: ${outcome ?? `${found} agreed`}`;
+          }
+        }
+        const result = editor.save({ by, did: command, claim: id, note });
+        console.log(`Recorded. Conclusion: ${result.conclusion}. Wrote ${result.written.join(', ')}.`);
+        for (const warning of result.warnings.filter((w) => w.claims.includes(id) && (w.code.startsWith('test-') || w.code === 'credence-label'))) console.log(`  Note: ${warning.message}`);
+        return 0;
+      } catch (e) {
+        if (e instanceof EditError) fail(e.message);
+        throw e;
+      }
+    }
+    case 'due': {
+      const args = [file, ...rest].filter((a): a is string => !!a);
+      const on = option(args, '--on') ?? new Date().toISOString().slice(0, 10);
+      const { due, upcoming } = dueOn(allPredictions(findRoot(process.cwd())), on);
+      if (args.includes('--json')) {
+        const row = (e: (typeof upcoming)[number], late?: number): object => ({
+          file: e.file,
+          claim: e.claim,
+          n: e.n,
+          says: e.prediction.says,
+          by: e.prediction.by,
+          due: e.prediction.due,
+          ...(late !== undefined ? { late } : {}),
+          marked: e.prediction.overdue !== undefined,
+        });
+        console.log(JSON.stringify({ on, due: due.map((d) => row(d.entry, d.late)), upcoming: upcoming.map((e) => row(e)) }, null, 2));
+        return 0;
+      }
+      const line = (e: (typeof upcoming)[number]): string => `${e.file}  ${e.claim}  test ${e.n}  by ${e.prediction.by}\n      ${e.prediction.says}`;
+      if (due.length === 0 && upcoming.length === 0) console.log('No open predictions.');
+      if (due.length > 0) console.log(`Due (${due.length}), as of ${on}`);
+      for (const d of due) console.log(`  ${d.late === 0 ? 'due today' : `${d.late} day${d.late === 1 ? '' : 's'} late`}${d.entry.prediction.overdue ? ', marked overdue' : ''}  ${line(d.entry)}`);
+      if (upcoming.length > 0) console.log(`${due.length > 0 ? '\n' : ''}To come (${upcoming.length})`);
+      for (const e of upcoming) console.log(`  due ${e.prediction.due}  ${line(e)}`);
+      return 0;
+    }
+    case 'record': {
+      const all = records(allPredictions(findRoot(process.cwd())));
+      const wanted = file ? all.filter((r) => r.name === file) : all;
+      if (wanted.length === 0) console.log(file ? `${file} has set no predictions.` : 'Nobody has set a prediction yet. Start with: argmap predict');
+      else console.log(wanted.map(formatRecord).join('\n\n'));
+      return 0;
     }
     case 'search': {
       const words = [file, ...rest].filter((w): w is string => !!w);

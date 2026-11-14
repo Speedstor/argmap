@@ -48,7 +48,10 @@ function settlements(a: Analysis): string {
 
 const KIND_NOTE: Record<Step['kind'], string> = {
   adjudicate: 'reviewers disagree, so it needs a decision',
-  answer: 'a reviewer rejected it: revise it, replace it or knock it out',
+  answer: 'a reviewer rejected it, or a test of it failed: revise it, replace it or let it fall',
+  resolve: 'a test is waiting for its outcome: check it and record what was found',
+  accept: 'someone set a test; until a voucher accepts it, a failure cannot knock the claim out',
+  predict: 'specific but never tested: before looking anything up, record what you expect to find',
   refine: 'a bet too vague to check; what is vague is listed under the claim',
   check: 'specific but unchecked, or trusted beyond its evidence: find a source or a test',
   settle: 'an open dispute: find evidence for one side, or sharpen both until they stop conflicting',

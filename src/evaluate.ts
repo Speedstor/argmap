@@ -1,4 +1,5 @@
 import { attackersOf } from './graph.ts';
+import { blocks, knocks, testVerdicts } from './predict.ts';
 import type { Argument, Status } from './types.ts';
 
 export type Statuses = Map<string, Status>;
@@ -18,8 +19,11 @@ export type Statuses = Map<string, Status>;
  */
 export function evaluate(arg: Argument, knocked: ReadonlySet<string> = new Set()): Statuses {
   const attackers = attackersOf(arg);
+  // A failed test the claim was vouched to pass knocks it out, the same way a person knocking it out does.
+  // An accepted test that is overdue holds the claim back: it may fall, and it may not stand.
+  const { fallen, held } = testVerdicts(arg);
   const status: Statuses = new Map();
-  for (const id of arg.claims.keys()) status.set(id, knocked.has(id) ? 'falls' : 'contested');
+  for (const id of arg.claims.keys()) status.set(id, knocked.has(id) || fallen.has(id) ? 'falls' : 'contested');
 
   let changed = true;
   while (changed) {
@@ -35,7 +39,7 @@ export function evaluate(arg: Argument, knocked: ReadonlySet<string> = new Set()
       if (defeated || unsupported) {
         status.set(claim.id, 'falls');
         changed = true;
-      } else if (supported && unopposed) {
+      } else if (supported && unopposed && !held.has(claim.id)) {
         status.set(claim.id, 'stands');
         changed = true;
       }
@@ -53,6 +57,8 @@ export function reason(arg: Argument, statuses: Statuses, knocked: ReadonlySet<s
   const list = (ids: string[]): string => ids.map((x) => `"${arg.claims.get(x)?.label ?? x}"`).join(', ');
 
   if (knocked.has(id)) return 'You knocked this out.';
+  const failed = claim.predictions.find((p) => knocks(claim, p));
+  if (failed) return `Failed a test it was vouched to pass: "${failed.says}"${failed.found !== undefined ? ` (${failed.found} of ${failed.sample}, with ${failed.needs} needed)` : ''}.`;
   if (status === 'falls') {
     const winners = against.filter((a) => statuses.get(a) === 'stands');
     if (winners.length > 0) return `Defeated by ${list(winners)}, which stands.`;
@@ -63,6 +69,8 @@ export function reason(arg: Argument, statuses: Statuses, knocked: ReadonlySet<s
     const open = against.filter((a) => statuses.get(a) === 'contested');
     const shaky = [...new Set(claim.because.flat().filter((m) => statuses.get(m) === 'contested'))];
     const parts: string[] = [];
+    const late = claim.predictions.find((p) => blocks(claim, p));
+    if (late) parts.push(`a test of it was due on ${late.due} and has no outcome`);
     const unsettled = (ids: string[]): string => `${list(ids)}, which ${ids.length > 1 ? 'are' : 'is'} not settled`;
     if (open.length > 0) parts.push(`opposed by ${unsettled(open)}`);
     if (shaky.length > 0) parts.push(`rests on ${unsettled(shaky)}`);

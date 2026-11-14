@@ -124,6 +124,9 @@ export function formatReport(loaded: Loaded, knocked: ReadonlySet<string> = new 
 const STEP_WORD: Record<Step['kind'], string> = {
   adjudicate: 'ADJUDICATE',
   answer: 'ANSWER',
+  resolve: 'RESOLVE',
+  accept: 'ACCEPT',
+  predict: 'PREDICT',
   refine: 'REFINE',
   check: 'CHECK',
   settle: 'SETTLE',
