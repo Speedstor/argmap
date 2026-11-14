@@ -18,8 +18,11 @@
 # then add a line here with the contents of that .pub file after your name.
 # Only ssh-ed25519 keys are checked for now.
 #
-# Nobody is listed yet. The line below is the key that signed the commits made
-# in the Claude session that built this tool. Remove the "# " to trust it. It
-# may not be the key a later session signs with.
+aldrin@person ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJOp/UAYTX6pE/zVydAdoiNfXCeFGgcmVWnykq7GTovu
+claude-fable-5.2@ai ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOLiVDU+9ISXVbqMM4aAJOLNy4SIETT9g1VAByO9n64a
+
+# The line below is a different key: the one that signed the commits made in
+# the Claude session that built this tool, before the key above existed.
+# Remove the "# " to trust those earlier commits too.
 #
 # claude-fable-5.2@ai ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKy87HxSEheG8vEPhSs9u2KZCtVErAQfpmprtUJCZ2w7
