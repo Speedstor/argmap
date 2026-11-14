@@ -267,7 +267,20 @@ The engine reports:
 - **test-inconsistent**: `p` does not lie between `if_false` and `if_true`;
 - **credence-label**: the three chances imply the setter believes the claim
   less than even, while labelling it `observed` or `corroborated`;
-- **test-one-case**: a claim about many cases is tested on one.
+- **test-one-case**: a claim about many cases is tested on one;
+- **test-own-only**: every passed test that could have knocked the claim out
+  was set by the claim's own side, meaning someone who vouches for it. It
+  stays quiet once a test has failed, or while an accepted test from someone
+  else is waiting.
+
+**Why test-own-only.** A measure picked by whoever it rewards stops measuring
+what it was meant to. That is Goodhart's law, and the essay
+[When Your Dashboards Deceive](https://amirsohil.github.io/goodhartslaw.html)
+gives the remedy used here: pair each measure with a second one that someone
+else sets, to catch what the first misses. For a claim, the second measure is
+a test from someone who does not vouch for it. Requiring two tests would not
+help, because a voucher can pick two easy ones. The warning only points. It
+sets no trust label and changes no status.
 
 `argmap verify` enforces the order. A prediction must arrive without its
 outcome, in the signer's own name, carrying the fingerprint of its claim. Its

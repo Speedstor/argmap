@@ -381,6 +381,50 @@ test('a test set by someone who vouches for the claim is the claim\'s own, whoev
   assert.ok(record.bitsOwn > 6);
 });
 
+test('a claim that has only passed its own side\'s tests is flagged until someone else tests it', () => {
+  const passed = `        outcome: yes\n        found: 55\n        resolved: 2026-11-20\n        resolved_by: model-x\n        resolved_kind: ai\n        source: https://example.org/sample-of-60.csv\n`;
+  const byModel = (source: string): string => source.replace('by: ann\n        made', 'by: model-x\n        kind: ai\n        made');
+  // Ann vouches for the claim, set the test and it passed: nobody outside has tried to knock the claim out.
+  const own = read(base(test60(accepted + passed)));
+  assert.ok(own.messages.some((m) => /"licence-present" has passed 1 test that could have knocked it out, and its own side set it \(ann\)/.test(m)));
+  // The warning points and nothing more.
+  assert.equal(analyze(own.arg).conclusion, 'stands');
+  // The same test set by someone who does not vouch for the claim, and accepted by Ann.
+  assert.ok(!read(base(byModel(test60(accepted + passed)))).codes.includes('test-own-only'));
+  // A pass that could not have knocked the claim out is not a pass to speak of.
+  assert.ok(!read(base(test60(accepted + passed, 'if_true: 0.8\n        if_false: 0.15'))).codes.includes('test-own-only'));
+  // An open test says nothing yet.
+  assert.ok(!read(base(test60(accepted))).codes.includes('test-own-only'));
+  // A second test, from someone who does not vouch for the claim, on what the first leaves out.
+  const second = (rest: string): string => `      - says: Of 60 further such repositories, at least 51 carry a licence that a standard list of licences names.
+        how: A licence counts when its text matches an entry on the SPDX list.
+        type: lookup
+        p: 0.6
+        if_true: 0.97
+        if_false: 0.3
+        sample: 60
+        needs: 51
+        by: model-x
+        kind: ai
+        made: 2026-11-21
+        due: 2026-12-05
+        rev: ${REV}
+${rest}`;
+  // Offered and not yet accepted, it could not knock the claim out, so the warning stays.
+  assert.ok(read(base(test60(accepted + passed) + second(''))).codes.includes('test-own-only'));
+  // Accepted and waiting for its outcome, it is the outside test the warning asks for.
+  const acceptedLater = `        accepted: [{ by: ann, kind: person, date: 2026-11-21 }]\n`;
+  assert.ok(!read(base(test60(accepted + passed) + second(acceptedLater))).codes.includes('test-own-only'));
+  // Once it passes, the claim has survived a test from outside.
+  const passedLater = `        outcome: yes\n        found: 53\n        resolved: 2026-11-30\n        resolved_by: model-x\n        resolved_kind: ai\n        source: https://example.org/second-sample.csv\n`;
+  assert.ok(!read(base(test60(accepted + passed) + second(acceptedLater + passedLater))).codes.includes('test-own-only'));
+  // Two vouch for the claim, one set the test and the other accepted it: still the claim's own side.
+  const two = read(
+    base(`${byModel(test60(accepted + passed))}    reviews:\n      - { by: model-x, kind: ai, verdict: confirm, rev: ${REV} }\n`),
+  );
+  assert.ok(two.messages.some((m) => /has passed 1 test that could have knocked it out, and its own side set it \(model-x\)/.test(m)));
+});
+
 test('a label above assumed with nobody\'s name behind it reads as assumed', async () => {
   const { readsAs } = await import('../src/index.ts');
   const bet = (label: string, reviews = ''): Argument => read(`conclusion: c\nclaims:\n  c:\n    text: Output reached 10 Mt in 2005.\n    bet: ${label}\n${reviews}`).arg;
