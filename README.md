@@ -3,6 +3,11 @@
 A build system for beliefs. Write an argument as a plain text file, and argmap
 tells you what it rests on, where it is exposed, and what falls when a bet fails.
 
+**Reading this repository?** Start with the
+[digest](../../tree/digest): every argument
+written out with its verdict, structure, open disputes and next steps. It is
+generated from `main` on each push and kept on the `digest` branch.
+
 It does not tell you what is true. Every chain of justification ends somewhere
 you chose to stop and trust (Agrippa's trilemma), so argmap makes those stopping
 points visible instead of hiding them:
