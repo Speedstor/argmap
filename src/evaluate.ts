@@ -1,5 +1,5 @@
 import { attackersOf } from './graph.ts';
-import { blocks, knocks, testVerdicts } from './predict.ts';
+import { blocks, knocks, readsAs, testVerdicts } from './predict.ts';
 import type { Argument, Status } from './types.ts';
 
 export type Statuses = Map<string, Status>;
@@ -78,7 +78,9 @@ export function reason(arg: Argument, statuses: Statuses, knocked: ReadonlySet<s
   }
   if (claim.because.length === 0) {
     const fallen = against.length > 0 ? ' Every objection to it has fallen.' : '';
-    return `Held as a bet (${claim.bet?.trust ?? 'assumed'}).${fallen}`;
+    const typed = claim.bet?.trust ?? 'assumed';
+    const read = readsAs(claim);
+    return `Held as a bet (${read}${read !== typed ? `; labelled ${typed}, with no name on the label` : ''}).${fallen}`;
   }
   const line = claim.because.find((group) => group.every((m) => statuses.get(m) === 'stands')) ?? [];
   const spare = claim.because.filter((group) => group.every((m) => statuses.get(m) === 'stands')).length - 1;

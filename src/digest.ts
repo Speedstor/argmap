@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { relative, sep } from 'node:path';
-import { analyze, attackersOf, claimRecord, describeTest, independentSources, lintClaim, nextSteps, parseFile, reason, resolution, reviewSummary, termKeys, testability, vouchers } from './index.ts';
+import { analyze, attackersOf, claimRecord, describeTest, readsAs, independentSources, lintClaim, nextSteps, parseFile, reason, resolution, reviewSummary, termKeys, testability, vouchers } from './index.ts';
 import { allPredictions, formatRecord, records as nameRecords } from './record.ts';
 import type { Analysis, Argument, Claim, Flag, RawFile, Resolution, Status, Step, Term } from './index.ts';
 import { isRepo, tryGit } from './git.ts';
@@ -107,6 +107,13 @@ function evidenceLines(claim: Claim): string[] {
   return out;
 }
 
+/** A bet's trust as it reads, and the label as typed when the two differ. */
+function trustWords(claim: Claim): string {
+  const typed = claim.bet?.trust ?? 'assumed';
+  const read = readsAs(claim);
+  return read === typed ? `trust ${typed}${claim.bet?.by ? `, set by ${claim.bet.by}` : ''}` : `trust ${read} (labelled ${typed}, which reads as assumed because nobody's name is on the label)`;
+}
+
 function testLines(claim: Claim): string[] {
   if (claim.predictions.length === 0) return [];
   const r = claimRecord(claim);
@@ -157,7 +164,7 @@ function outline(arg: Argument, a: Analysis): { lines: string[]; order: string[]
     if (!repeat) order.push(id);
     const tags = [
       role === 'against' ? (disputed.has(`${id}|${target}`) ? 'in dispute with the claim above' : 'objection to the claim above') : '',
-      claim.bet ? `bet: ${claim.bet.trust}` : '',
+      claim.bet ? `bet: ${readsAs(claim)}` : '',
       repeat ? 'shown above' : '',
     ].filter((x) => x !== '');
     lines.push(`${'  '.repeat(depth)}- ${a.statuses.get(id) ?? 'contested'} ${code(id)}${tags.length > 0 ? ` (${tags.join('; ')})` : ''}`);
@@ -199,7 +206,7 @@ function argumentClaim(arg: Argument, a: Analysis, claim: Claim, res: Resolution
   const holdsUp = [...arg.claims.values()].filter((c) => c.because.some((g) => g.includes(id))).map((c) => c.id);
   const bet = a.bets.find((b) => b.id === id);
   const out = [`### ${id}`, '', `- status: ${a.statuses.get(id) ?? 'contested'}${why(arg, a, id)}`];
-  out.push(`- kind: ${claim.bet ? `bet, trust ${claim.bet.trust}, cost ${claim.bet.cost}${claim.bet.explicit ? '' : ' (no bet written, so assumed)'}` : 'supported'}`);
+  out.push(`- kind: ${claim.bet ? `bet, ${trustWords(claim)}, cost ${claim.bet.cost}${claim.bet.explicit ? '' : ' (no bet written, so assumed)'}` : 'supported'}`);
   out.push(`- text: ${one(claim.text)}`);
   if (claim.because.length > 0) out.push(`- rests on: ${support(claim)}`);
   if (holdsUp.length > 0) out.push(`- holds up: ${ids(holdsUp)}`);
@@ -315,7 +322,7 @@ function libraryPage(root: string, library: RawFile[], entries: Entry[]): string
         const there = e.loaded.argument?.claims.get(id);
         return there && there.origin !== '' ? [`${code(e.file)} (${e.analysis?.statuses.get(id) ?? 'not computed'} there)`] : [];
       });
-      out.push(`### ${id}`, '', `- kind: ${claim.bet ? `bet, trust ${claim.bet.trust}, cost ${claim.bet.cost}` : 'supported'}`, `- text: ${one(claim.text)}`);
+      out.push(`### ${id}`, '', `- kind: ${claim.bet ? `bet, ${trustWords(claim)}, cost ${claim.bet.cost}` : 'supported'}`, `- text: ${one(claim.text)}`);
       if (claim.because.length > 0) out.push(`- rests on: ${support(claim)}`);
       if (holdsUp.length > 0) out.push(`- holds up: ${ids(holdsUp)}`);
       if (objectsTo.length > 0) out.push(`- objects to: ${ids(objectsTo)}`);

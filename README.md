@@ -175,6 +175,8 @@ npm run argmap -- record     # what each name's predictions show
   its own vouchers or someone else typed the figures; how many were withdrawn;
   and how many failed under an earlier wording.
 - **Trust labels stay typed.** A record sits beside a label and never sets it.
+  A label above `assumed` with nobody's name behind it reads as `assumed`,
+  because it claims a check nobody stands behind.
 - **Reminders.** `.github/workflows/due.yml` opens an issue each day for every
   prediction that has come due, so nobody has to remember to look.
 

@@ -87,7 +87,7 @@ export function formatReport(loaded: Loaded, knocked: ReadonlySet<string> = new 
     out.push(
       `  ${MARK[b.status]} ${b.id.padEnd(width)}  ${b.trust.padEnd(12)}  ${b.side.padEnd(7)}  if it fails: ${flag}${
         b.alsoChanges > 0 ? `, ${b.alsoChanges} other claim${b.alsoChanges > 1 ? 's change' : ' changes'}` : ''
-      }`,
+      }${b.labelled !== b.trust ? `  (labelled ${b.labelled}, no name on it)` : ''}`,
     );
   }
   out.push('');

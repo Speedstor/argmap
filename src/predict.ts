@@ -1,6 +1,6 @@
 import { claimRev, reviewSummary } from './review.ts';
 import { plainText } from './terms.ts';
-import type { Argument, Claim, Issue, Prediction } from './types.ts';
+import type { Argument, Claim, Issue, Prediction, Trust } from './types.ts';
 
 /** At or above this chance of a yes when the claim is true, the claim is taken to imply the test. */
 export const IMPLIES = 0.95;
@@ -17,6 +17,17 @@ export function vouchers(claim: Claim): string[] {
   if (claim.bet?.by) names.add(claim.bet.by);
   for (const review of reviewSummary(claim).current) if (review.verdict === 'confirm') names.add(review.by);
   return [...names];
+}
+
+/**
+ * What a bet's trust label reads as. A label above "assumed" claims that
+ * something was checked. With nobody's name behind it, it claims a check that
+ * nobody stands behind, so it reads as assumed. The label as typed is kept in
+ * the file; nothing rewrites it.
+ */
+export function readsAs(claim: Claim): Trust {
+  const typed = claim.bet?.trust ?? 'assumed';
+  return typed !== 'assumed' && vouchers(claim).length === 0 ? 'assumed' : typed;
 }
 
 /** Does this test the claim as it reads now? A test of an earlier wording is kept, and no longer counts. */
@@ -152,6 +163,13 @@ export function predictionIssues(arg: Argument): Issue[] {
     issues.push({ severity: 'warning', code, message, claims: [id] });
   };
   for (const claim of arg.claims.values()) {
+    if (claim.bet && claim.bet.trust !== 'assumed' && readsAs(claim) === 'assumed') {
+      warn(
+        'trust-unvouched',
+        `"${claim.id}" is labelled ${claim.bet.trust}, but nobody's name is on the label and nobody has confirmed the claim, so it reads as assumed. Whoever stands behind the check: set the label in your own name, or confirm the claim in a review.`,
+        claim.id,
+      );
+    }
     if (claim.predictions.length === 0) continue;
     const rev = claimRev(claim);
     const backers = vouchers(claim);
@@ -193,7 +211,7 @@ export function predictionIssues(arg: Argument): Issue[] {
         warn('test-inconsistent', `${name}: the chance of a yes (${p.p}) must lie between the chance if the claim is false (${p.ifFalse}) and if it is true (${p.ifTrue}).`, claim.id);
       }
       const credence = impliedCredence(p);
-      const trust = claim.bet?.trust;
+      const trust = claim.bet ? readsAs(claim) : undefined;
       if (credence !== undefined && credence < 0.5 && (trust === 'observed' || trust === 'corroborated') && backers.includes(p.by)) {
         warn(
           'credence-label',

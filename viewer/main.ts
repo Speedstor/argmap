@@ -1,4 +1,4 @@
-import { analyze, attackersOf, claimRev, isCurrent, load, nextSteps, settle, severity, plainText, reason, resolution, reviewSummaries, segments, TRUST_LEVELS } from '../src/index.ts';
+import { analyze, attackersOf, claimRev, isCurrent, load, readsAs, nextSteps, settle, severity, plainText, reason, resolution, reviewSummaries, segments, TRUST_LEVELS } from '../src/index.ts';
 import type { Analysis, Argument, Claim, Issue, Loaded, Resolution, ReviewState, ReviewSummary, Status, StepKind, Trust } from '../src/index.ts';
 import { layout } from './layout.ts';
 import type { Box } from './layout.ts';
@@ -341,7 +341,7 @@ function renderGraph(arg: Argument, a: Analysis, available: number): HTMLElement
       },
       h('span', { class: 'node-mark', 'aria-hidden': 'true' }, state.knocked.has(claim.id) ? '⊘' : STATUS_MARK[st]),
       h('span', { class: 'node-label' }, claim.label),
-      claim.bet ? pips(claim.bet.trust) : null,
+      claim.bet ? pips(readsAs(claim)) : null,
     );
     if (claim.id === arg.conclusion) node.classList.add('node-root');
     if (state.knocked.has(claim.id)) node.classList.add('node-knocked');
@@ -410,7 +410,7 @@ function renderDetail(arg: Argument, a: Analysis, x: Extra): HTMLElement {
       h(
         'div',
         { class: 'detail-bet' },
-        h('div', { class: 'bet-trust' }, pips(claim.bet.trust), h('strong', {}, TRUST_WORD[claim.bet.trust])),
+        h('div', { class: 'bet-trust' }, pips(readsAs(claim)), h('strong', {}, TRUST_WORD[readsAs(claim)]), readsAs(claim) !== claim.bet.trust ? h('span', { class: 'review-by' }, ` labelled ${claim.bet.trust}, with no name on the label`) : null),
         claim.bet.note ? h('p', { class: 'bet-note' }, claim.bet.note) : null,
         h('p', { class: 'bet-effect' }, effect),
       ),

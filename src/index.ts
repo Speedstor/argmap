@@ -17,7 +17,7 @@ export { nextSteps } from './next.ts';
 export type { Step, StepKind } from './next.ts';
 export { toYaml, evidenceToYaml, predictionToYaml } from './serialize.ts';
 export { evidenceIssues, independentSources } from './evidence.ts';
-export { blocks, claimRecord, couldKnock, describeTest, impliedCredence, IMPLIES, isCurrent, knocks, predictionIssues, severity, SOFT_RATIO, testability, testVerdicts, vouchers } from './predict.ts';
+export { blocks, claimRecord, couldKnock, describeTest, impliedCredence, IMPLIES, isCurrent, knocks, predictionIssues, readsAs, severity, SOFT_RATIO, testability, testVerdicts, vouchers } from './predict.ts';
 export type { ClaimRecord, Testability } from './predict.ts';
 export { evaluate, reason } from './evaluate.ts';
 export type { Statuses } from './evaluate.ts';

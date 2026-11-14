@@ -380,3 +380,19 @@ test('a test set by someone who vouches for the claim is the claim\'s own, whoev
   assert.deepEqual([record.passed, record.passedFromOthers, record.bitsOthers, record.offered], [1, 0, 0, 0]);
   assert.ok(record.bitsOwn > 6);
 });
+
+test('a label above assumed with nobody\'s name behind it reads as assumed', async () => {
+  const { readsAs } = await import('../src/index.ts');
+  const bet = (label: string, reviews = ''): Argument => read(`conclusion: c\nclaims:\n  c:\n    text: Output reached 10 Mt in 2005.\n    bet: ${label}\n${reviews}`).arg;
+  const claim = (arg: Argument): NonNullable<ReturnType<Argument['claims']['get']>> => arg.claims.get('c') as NonNullable<ReturnType<Argument['claims']['get']>>;
+  const unnamed = bet('corroborated');
+  assert.equal(readsAs(claim(unnamed)), 'assumed');
+  // The label as typed stays in the file and in the report, next to what it reads as.
+  assert.deepEqual([analyze(unnamed).bets[0]?.trust, analyze(unnamed).bets[0]?.labelled], ['assumed', 'corroborated']);
+  assert.ok(load('conclusion: c\nclaims:\n  c: { text: Output reached 10 Mt in 2005., bet: corroborated }').issues.some((i) => i.code === 'trust-unvouched'));
+  // A name on the label, or a standing confirmation, is someone standing behind it.
+  assert.equal(readsAs(claim(bet('{ trust: corroborated, by: ann }'))), 'corroborated');
+  assert.equal(readsAs(claim(bet('corroborated', '    reviews:\n      - { by: bob, verdict: confirm }\n'))), 'corroborated');
+  assert.equal(readsAs(claim(bet('corroborated', '    reviews:\n      - { by: bob, verdict: reject }\n'))), 'assumed');
+  assert.equal(readsAs(claim(bet('assumed'))), 'assumed');
+});

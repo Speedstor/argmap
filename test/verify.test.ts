@@ -618,3 +618,37 @@ test('a new review carries the full fingerprint of the claim it judged', () => {
   commit({ [file]: reviewed(`      - { by: bob, kind: person, verdict: confirm, rev: ${claimRev({ text: SHOPS, because: [] })} }\n`) }, 'bob confirms properly', bob);
   assert.deepEqual(sinceWith(from), []);
 });
+
+/* ---------- Third round ---------- */
+
+test('in a pull request, a commit that adds to the predictions cannot be dated before the newest commit on the base', () => {
+  startOn('2025-01-01');
+  const file = 'claims/c1.yaml';
+  const old = commit({ [file]: street('', '', 'ann') }, 'main, a year ago', ann);
+  on('2026-11-14');
+  const tip = commit({ 'notes.md': 'later work\n' }, 'main today', ann);
+  // A branch cut from last year's main, carrying a forecast "made" last year.
+  run(['reset', '-q', '--hard', old]);
+  on('2025-01-02');
+  commit({ [file]: street(door({ type: 'forecast', made: '2025-01-02', due: '2026-12-01', rest: '        accepted: [{ by: ann, kind: person, date: 2025-01-02 }]\n' }), '', 'ann') }, 'a forecast dated a year ago', ann);
+  const inPullRequest = verifyRange(root, `${tip}..HEAD`, three, { separate: true }).flatMap((c) => c.problems);
+  assert.ok(inPullRequest.some((p) => /adds to the predictions but is dated 2025-01-02, before the newest commit on the base \(2026-11-14\)/.test(p)));
+  // Work that touches no prediction can still sit on an old fork point.
+  run(['reset', '-q', '--hard', old]);
+  commit({ 'notes.md': 'an old branch\n' }, 'unrelated work on an old branch', ann);
+  assert.deepEqual(verifyRange(root, `${tip}..HEAD`, three, { separate: true }).flatMap((c) => c.problems), []);
+});
+
+test('redefining a library term is seen as rewording the claims that pin it, in files the commit did not touch', () => {
+  startOn('2026-11-14');
+  const library = (definition: string): string => `terms:\n  shop: ${definition}\nclaims:\n  bakery:\n    text: The street has a bakery.\n    bet: assumed\n`;
+  const text = 'Every {shop} on the street opens before nine.';
+  const pinned = JSON.stringify([['shop', 'A bakery.']]);
+  const argument = `title: T\nconclusion: a\nclaims:\n  a:\n    text: ${text}\n    bet: { trust: assumed, by: ann }\n${door({ rev: claimRev({ text, because: [], pinned }), rest: acceptedBy('ann') })}`;
+  commit({ 'claims/terms.yaml': library('A bakery.'), 'arguments/x.yaml': argument.replace(/    predictions:[\s\S]*$/, '') }, 'ann bets, using a library term', ann);
+  commit({ 'arguments/x.yaml': argument }, 'ann sets a test', ann);
+  assert.deepEqual(sinceWith('HEAD~1'), []);
+  const from = head();
+  commit({ 'claims/terms.yaml': library('Any premises that sells anything.') }, 'ann widens the term in the library only', ann);
+  assert.ok(sinceWith(from).some((p) => /"a" was reworded or rewired while an accepted test of it was waiting/.test(p)));
+});

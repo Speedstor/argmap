@@ -61,6 +61,13 @@ trust. Label it with how far it has been checked.
 | `track-record` | This kind of claim or source has held up before. |
 | `assumed` | Not checked. |
 
+A label above `assumed` says something was checked. If nobody's name is on
+the label (`by`) and nobody has confirmed the claim in a review, it claims a
+check that nobody stands behind, so it **reads as `assumed`**: in the ranking
+of bets, in the next steps, and in the report, which shows both what it reads
+as and what was typed. The file is not changed. The engine reports this as
+`trust-unvouched`.
+
 `bet: assumed` is shorthand for `bet: { trust: assumed }`. A leaf with no bet is
 treated as `assumed` and reported with a warning. A claim cannot have both
 support and a bet.
@@ -268,7 +275,13 @@ fixed fields (everything down to `rev`) never change, and it is never removed.
 An acceptance must come from someone who vouches for the claim, before the
 outcome. An outcome is recorded once, in the signer's name. With
 `--pull-request`, a prediction and its outcome may not arrive in the same
-range of commits.
+range of commits, and a commit that adds to the predictions may not be dated
+before the newest commit on the base: a branch cut from an old commit would
+otherwise carry a forecast "made" long ago. Rebase first.
+
+Redefining a term in the claims library rewords every claim that pins it, so
+when a commit changes a definition there, `verify` looks at every argument
+file for a test left waiting on a reworded claim.
 
 Statuses are worked out from the files as they stand. `verify` is what makes
 the records in them worth trusting, so a status means what it says only on

@@ -369,6 +369,11 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
   const byKey = new Map(signers.map((s) => [s.key, s]));
   const checks: CommitCheck[] = [];
   const dateOf = (rev: string): number => Number(git(root, ['log', '-1', '--format=%ct', rev]));
+  // For a pull request, the newest commit on the base. A prediction's time is when it reaches main, so a commit
+  // that adds to the predictions cannot be dated before that: a branch cut from an old commit would otherwise
+  // carry a forecast "made" long ago.
+  const base = options.separate && /^[^.]+\.\.[^.]+$/.test(range) ? range.split('..')[0] : undefined;
+  const baseDate = base !== undefined && refExists(root, base) ? dateOf(base) : undefined;
   const day = (seconds: number): string => new Date(seconds * 1000).toISOString().slice(0, 10);
   // The terms defined in the claims library at a commit. A claim's fingerprint takes in the definitions of the terms it pins.
   const libraryTerms = new Map<string, Map<string, Term>>();
@@ -420,13 +425,14 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
     const signer = check.signer;
     if (signer && merge?.kind !== 'clean') {
       // With -m a merge is compared with each parent in turn; an ordinary commit has one.
-      const changed = [
-        ...new Set(
-          git(root, ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-m', commit])
-            .split('\n')
-            .filter((path) => /^(arguments|claims)\/.*\.ya?ml$/.test(path)),
-        ),
-      ];
+      const tracked = (path: string): boolean => /^(arguments|claims)\/.*\.ya?ml$/.test(path);
+      let changed = [...new Set(git(root, ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-m', commit]).split('\n').filter(tracked))];
+      // Redefining a term in the library rewords every claim that pins it, in files this commit never touched.
+      // When a definition changed, look at every file, so a test waiting on such a claim is not left behind unseen.
+      const definitions = (rev: string): string => JSON.stringify([...termsAt(rev)].map(([key, term]) => [key, term.definition]).sort());
+      if (changed.some((path) => path.startsWith('claims/')) && parents.some((parent) => definitions(parent) !== definitions(commit))) {
+        changed = [...new Set([...changed, ...(tryGit(root, ['ls-tree', '-r', '--name-only', commit, '--', 'arguments', 'claims']) ?? '').split('\n').filter(tracked)])];
+      }
       // Predictions are followed across every file the commit touches, so moving a claim to another file does not look like deleting its tests.
       const hadPredictions = new Map<string, Tracked>();
       const hasPredictions = new Map<string, Tracked>();
@@ -519,6 +525,13 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
         check.problems.push(`${where}: the trust label on "${id}" carried ${earlier.by}'s name, and ${signer.principal} ${label ? 'changed it without putting their own name on it' : 'removed it'}`);
       }
       check.problems.push(...predictionProblems(hadPredictions, hasPredictions, signer, changed.length === 1 ? (changed[0] as string) : 'predictions', commitDay));
+      const grew = [...hasPredictions].some(([key, now]) => {
+        const old = hadPredictions.get(key);
+        return !old || (old.outcome === undefined && now.outcome !== undefined) || (!old.overdue && now.overdue !== undefined) || now.accepted.length > old.accepted.length;
+      });
+      if (grew && baseDate !== undefined && dated < baseDate - SKEW_SECONDS) {
+        check.problems.push(`adds to the predictions but is dated ${day(dated)}, before the newest commit on the base (${day(baseDate)}). Rebase onto the base first: a prediction's time is when it reaches main.`);
+      }
       for (const [key, now] of hasPredictions) {
         if (!hadPredictions.has(key)) born.set(key, commit);
         else if (options.separate && now.outcome !== undefined && hadPredictions.get(key)?.outcome === undefined && born.has(key)) {
