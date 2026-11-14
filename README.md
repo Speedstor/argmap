@@ -73,6 +73,9 @@ request and every push to `main`. From `main` it also writes the digest to the
 
 ## Keep a private copy
 
+The settings to change by hand on GitHub, for this repository or a copy, are
+listed in [docs/github-setup.md](docs/github-setup.md).
+
 The tool is public; your arguments do not have to be. A private copy is an
 ordinary private repository that starts as a copy of this one and keeps
 receiving its updates. It cannot be a GitHub fork, because a fork of a public
@@ -376,6 +379,7 @@ These follow from the bets as written. None of them means "true".
 | Path | What it is |
 | --- | --- |
 | `docs/format.md` | The argument file format |
+| `docs/github-setup.md` | The settings to change by hand on GitHub: branch rules, merge buttons, notifications |
 | `arguments/` | Argument files. Each one is data; adding one needs no code |
 | `claims/` | The shared claims library |
 | `src/` | The engine: parsing, checks, evaluation, analysis, lint, reviews. Deterministic, no AI |
