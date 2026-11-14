@@ -8,6 +8,10 @@ tells you what it rests on, where it is exposed, and what falls when a bet fails
 written out with its verdict, structure, open disputes and next steps. It is
 generated from `main` on each push and kept on the `digest` branch.
 
+The loose thinking behind the arguments is in the
+[notepads](../../tree/ideas): plain pages of ideas that are not claims yet.
+They are kept on the `ideas` branch, which is never merged into `main`.
+
 It does not tell you what is true. Every chain of justification ends somewhere
 you chose to stop and trust (Agrippa's trilemma), so argmap makes those stopping
 points visible instead of hiding them:
