@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { analyze, evaluate, knockOut, load, plainText, segments } from '../src/index.ts';
+import { analyze, evaluate, knockOut, load, plainText, segments, settle } from '../src/index.ts';
 import type { Argument } from '../src/index.ts';
 
 function arg(source: string): Argument {
@@ -190,4 +190,24 @@ test('the civilization argument loads and hinges on three disputes', () => {
   assert.equal(a.statuses.get('early-industry-fossil-free'), 'falls');
   const won = evaluate(loaded.argument as Argument, new Set(['surface-coal-remains', 'slow-green-path', 'head-start']));
   assert.equal(won.get('never-again'), 'stands');
+});
+
+test('a dispute is moot once its winner has fallen through a dispute further down', () => {
+  const a = arg(`
+conclusion: c
+claims:
+  c: { text: C, because: [y] }
+  y: { text: Y, bet: assumed }
+  x: { text: X, because: [m] }
+  m: { text: M, bet: assumed }
+  n: { text: N, bet: assumed }
+disputes: [[x, y], [m, n]]
+`);
+  // x beats y, but x rests on m, and m loses to n. So x falls and y is unopposed.
+  const s = evaluate(settle(a, [['x', 'y'], ['n', 'm']]));
+  assert.equal(s.get('x'), 'falls');
+  assert.equal(s.get('y'), 'stands');
+  assert.equal(s.get('c'), 'stands');
+  // Only one of the four settlements sinks the conclusion: x beats y and m beats n.
+  assert.deepEqual(analyze(a).cruxes.tally, { stands: 3, falls: 1, contested: 0, total: 4 });
 });

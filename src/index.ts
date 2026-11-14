@@ -18,7 +18,7 @@ export { toYaml, evidenceToYaml } from './serialize.ts';
 export { evidenceIssues, independentSources } from './evidence.ts';
 export { evaluate, reason } from './evaluate.ts';
 export type { Statuses } from './evaluate.ts';
-export { analyze, knockOut, betReports, cruxSummary } from './analyze.ts';
+export { analyze, knockOut, betReports, cruxSummary, settle } from './analyze.ts';
 export type { Analysis, BetReport, Change, Crux, CruxSummary } from './analyze.ts';
 export { sides, structureIssues, supportersClosure, attackersOf } from './graph.ts';
 export type { Side } from './graph.ts';

@@ -1,4 +1,4 @@
-import { analyze, attackersOf, load, nextSteps, plainText, reason, resolution, reviewSummaries, segments, TRUST_LEVELS } from '../src/index.ts';
+import { analyze, attackersOf, load, nextSteps, settle, plainText, reason, resolution, reviewSummaries, segments, TRUST_LEVELS } from '../src/index.ts';
 import type { Analysis, Argument, Claim, Issue, Loaded, Resolution, ReviewState, ReviewSummary, Status, StepKind, Trust } from '../src/index.ts';
 import { layout } from './layout.ts';
 import type { Box } from './layout.ts';
@@ -63,9 +63,12 @@ const state: {
   source: string;
   loaded: Loaded;
   knocked: Set<string>;
+  /** Disputes the viewer has taken a side in: pair key -> [winner, loser]. */
+  settled: Map<string, [string, string]>;
   selected: string;
-  loadError: string;
-} = { source: '', loaded: { issues: [], ok: false }, knocked: new Set(), selected: '', loadError: '' };
+} = { source: '', loaded: { issues: [], ok: false }, knocked: new Set(), settled: new Map(), selected: '' };
+
+const pairKey = (a: string, b: string): string => [a, b].sort().join('\u0000');
 
 const root = document.getElementById('app') as HTMLElement;
 
@@ -73,6 +76,7 @@ function setSource(source: string): void {
   state.source = source;
   state.loaded = load(source);
   state.knocked = new Set();
+  state.settled = new Map();
   state.selected = state.loaded.argument?.conclusion ?? '';
   document.title = state.loaded.argument?.title ?? 'argmap';
 }
@@ -189,19 +193,21 @@ function renderVerdict(arg: Argument, a: Analysis, x: Extra): HTMLElement {
 
 function renderBar(arg: Argument, a: Analysis): HTMLElement {
   const n = state.knocked.size;
+  const sided = state.settled.size;
   return h(
     'div',
     { class: 'bar' },
     pill(a.conclusion),
-    h('span', { class: 'bar-text' }, `${n} knocked out`),
+    h('span', { class: 'bar-text' }, `${n} knocked out${sided > 0 ? `, ${sided} dispute${sided > 1 ? 's' : ''} settled` : ''}`),
     h(
       'button',
       {
         class: 'btn btn-quiet',
         type: 'button',
-        disabled: n === 0,
+        disabled: n === 0 && sided === 0,
         click: () => {
           state.knocked.clear();
+          state.settled.clear();
           render();
         },
       },
@@ -516,7 +522,7 @@ function renderDisputes(arg: Argument, a: Analysis): HTMLElement | null {
     const sideCard = (id: string, other: string, outcome: Status | undefined): HTMLElement => {
       const claim = arg.claims.get(id) as Claim;
       const st = a.statuses.get(id) ?? 'contested';
-      const chosen = state.knocked.has(other) && !state.knocked.has(id);
+      const chosen = state.settled.get(pairKey(id, other))?.[0] === id;
       return h(
         'div',
         { class: `side${chosen ? ' side-chosen' : ''}`, 'data-status': st },
@@ -529,11 +535,8 @@ function renderDisputes(arg: Argument, a: Analysis): HTMLElement | null {
             class: 'btn',
             type: 'button',
             click: () => {
-              if (chosen) state.knocked.delete(other);
-              else {
-                state.knocked.add(other);
-                state.knocked.delete(id);
-              }
+              if (chosen) state.settled.delete(pairKey(id, other));
+              else state.settled.set(pairKey(id, other), [id, other]);
               render();
             },
           },
@@ -889,27 +892,29 @@ function render(): void {
     return;
   }
 
-  const a = analyze(arg, state.knocked);
+  // Siding with one party in a dispute drops the other party's attack; the map is drawn as settled.
+  const view = settle(arg, [...state.settled.values()]);
+  const a = analyze(view, state.knocked);
   const x: Extra = { res: resolution(arg), reviews: reviewSummaries(arg) };
   // Content width of the page, less the map's border and inner padding.
   const cs = getComputedStyle(root);
   const available = Math.max(260, root.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 14);
   parts.push(
-    renderVerdict(arg, a, x),
-    renderBar(arg, a),
+    renderVerdict(view, a, x),
+    renderBar(view, a),
     h(
       'section',
       { class: 'block block-map' },
       h('h2', {}, 'The map'),
       h('p', { class: 'lede' }, 'Conclusion on the left, bets on the right. Tap a claim to read it, then knock it out to see what falls. A deep map scrolls sideways.'),
-      renderGraph(arg, a, available),
+      renderGraph(view, a, available),
       renderLegend(),
-      renderDetail(arg, a, x),
+      renderDetail(view, a, x),
     ),
-    renderSteps(arg, a),
+    renderSteps(view, a),
     renderDisputes(arg, a),
-    renderBets(arg, a, x),
-    renderOutline(arg, a),
+    renderBets(view, a, x),
+    renderOutline(view, a),
     renderRounds(arg),
     renderNotepad(),
     renderIssues(

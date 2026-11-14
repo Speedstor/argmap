@@ -31,7 +31,7 @@ export interface BetReport {
 export interface Crux {
   a: string;
   b: string;
-  /** Conclusion if `a` wins the dispute (that is, `b` is knocked out), and the reverse. */
+  /** Conclusion if `a` wins the dispute (that is, `b` no longer counts against it), and the reverse. */
   ifAPrevails: Status;
   ifBPrevails: Status;
 }
@@ -96,6 +96,23 @@ export function betReports(arg: Argument, knocked: ReadonlySet<string>, base: St
   );
 }
 
+/**
+ * Settle disputes: each outcome is [winner, loser]. The loser's attack on the
+ * winner is dropped, so the dispute becomes a one-way attack. The loser is not
+ * removed: if the winner later falls for another reason, nothing is left
+ * opposing the loser and it stands again.
+ */
+export function settle(arg: Argument, outcomes: readonly (readonly [string, string])[]): Argument {
+  if (outcomes.length === 0) return arg;
+  const dropped = new Set(outcomes.map(([winner, loser]) => `${loser}\u0000${winner}`));
+  const settled = (a: string, b: string): boolean => outcomes.some(([w, l]) => (w === a && l === b) || (w === b && l === a));
+  return {
+    ...arg,
+    attacks: arg.attacks.filter((x) => !dropped.has(`${x.from}\u0000${x.to}`)),
+    disputes: arg.disputes.filter(([a, b]) => !settled(a, b)),
+  };
+}
+
 const MAX_ENUMERATED_CRUXES = 10;
 
 /**
@@ -104,14 +121,14 @@ const MAX_ENUMERATED_CRUXES = 10;
  */
 export function cruxSummary(arg: Argument, knocked: ReadonlySet<string>, base: Statuses): CruxSummary {
   const open = arg.disputes.filter(([a, b]) => base.get(a) === 'contested' && base.get(b) === 'contested');
-  const conclusionWith = (losers: string[]): Status =>
-    evaluate(arg, new Set([...knocked, ...losers])).get(arg.conclusion) as Status;
+  const conclusionWith = (outcomes: [string, string][]): Status =>
+    evaluate(settle(arg, outcomes), knocked).get(arg.conclusion) as Status;
 
   const cruxes: Crux[] = open.map(([a, b]) => ({
     a,
     b,
-    ifAPrevails: conclusionWith([b]),
-    ifBPrevails: conclusionWith([a]),
+    ifAPrevails: conclusionWith([[a, b]]),
+    ifBPrevails: conclusionWith([[b, a]]),
   }));
   const summary: CruxSummary = { cruxes, standsOnlyIf: [] };
   if (open.length === 0 || open.length > MAX_ENUMERATED_CRUXES) return summary;
@@ -120,13 +137,13 @@ export function cruxSummary(arg: Argument, knocked: ReadonlySet<string>, base: S
   let common: Set<string> | undefined;
   for (let mask = 0; mask < tally.total; mask++) {
     const winners: string[] = [];
-    const losers: string[] = [];
+    const outcomes: [string, string][] = [];
     open.forEach(([a, b], i) => {
       const aWins = (mask & (1 << i)) === 0;
       winners.push(aWins ? a : b);
-      losers.push(aWins ? b : a);
+      outcomes.push(aWins ? [a, b] : [b, a]);
     });
-    const outcome = conclusionWith(losers);
+    const outcome = conclusionWith(outcomes);
     tally[outcome]++;
     if (outcome === 'stands') {
       const current: Set<string> = common ?? new Set(winners);
