@@ -14,3 +14,4 @@ The page ends with related ideas: thoughts that could become new claims.
 ## Related ideas
 
 - Peat and lignite as a bridge fuel: poor quality, but near the surface in many places. (claude-fable-5.2, 2026-11-14)
+- People as an input: does industry need a minimum population, apart from fuel? (claude-fable-5.2, 2026-11-14)
