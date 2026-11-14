@@ -19,6 +19,8 @@ export interface Bet {
   note?: string;
   /** False when the file gave no bet and the engine filled in "assumed". */
   explicit: boolean;
+  /** Who set the trust label. That signer vouches for the bet. */
+  by?: string;
 }
 
 export interface Claim {
@@ -38,6 +40,14 @@ export interface Claim {
   reviews: Review[];
   /** What has been found for or against this claim. */
   evidence: Evidence[];
+  /**
+   * The definitions of the terms this claim pins, as one string. It is part of
+   * the claim's fingerprint, so redefining a word the claim turns on makes
+   * earlier reviews and tests stale, the same as rewording the claim.
+   */
+  pinned?: string;
+  /** Tests of this claim: what was expected before looking, and what was found. */
+  predictions: Prediction[];
   /** The file this claim was defined in: '' for the argument file, otherwise a library file name. */
   origin: string;
 }
@@ -93,6 +103,62 @@ export interface Evidence {
   witness?: string;
   firstHand?: boolean;
   peerReviewed?: boolean;
+}
+
+export const PREDICTION_TYPES = ['lookup', 'forecast'] as const;
+/** lookup: the answer already exists and only has to be found. forecast: it does not exist yet. */
+export type PredictionType = (typeof PREDICTION_TYPES)[number];
+export const OUTCOMES = ['yes', 'no', 'void'] as const;
+export type Outcome = (typeof OUTCOMES)[number];
+
+/** A name put to something, with the kind of signer and the day. */
+export interface Signed {
+  by: string;
+  kind: ReviewerKind;
+  date?: string;
+}
+
+/**
+ * A test of a claim, written down before the answer is known: what will be
+ * found, how a yes is told from a no, and how likely a yes is. The fields down
+ * to `rev` are fixed once recorded. The rest is added later, each part once.
+ */
+export interface Prediction {
+  /** What will be found, as a statement that turns out yes or no. */
+  says: string;
+  /** How a yes is told from a no. */
+  how: string;
+  type: PredictionType;
+  /** The setter's chance of a yes. Used to score the setter, and for nothing else. */
+  p: number;
+  /** The chance of a yes if the claim is true. 1 when the claim strictly implies it. */
+  ifTrue: number;
+  /** The chance of a yes if the claim is false. Absent when the setter did not say. */
+  ifFalse?: number;
+  /** How many independent cases will be looked at, and how many must agree for a yes. */
+  sample?: number;
+  needs?: number;
+  by: string;
+  kind: ReviewerKind;
+  made: string;
+  due: string;
+  /** Fingerprint of the claim wording this tests. A test of an older wording is stale. */
+  rev?: string;
+
+  /** Those who vouch for the claim and agreed, before the outcome, that it implies this test. */
+  accepted: Signed[];
+  /** Filed when the due date has passed with no outcome. The claim cannot stand until it is resolved. */
+  overdue?: Signed;
+  outcome?: Outcome;
+  /** With a sample: how many cases agreed. */
+  found?: number;
+  resolved?: string;
+  resolvedBy?: string;
+  resolvedKind?: ReviewerKind;
+  source?: string;
+  note?: string;
+  /** Others who checked the recorded outcome and agree with it. */
+  confirmed: Signed[];
 }
 
 /** One round of work on an argument, with the verdict it left behind. */

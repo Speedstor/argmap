@@ -121,7 +121,7 @@ claims:
   unchecked: { text: A claim about 1902., bet: assumed }
   checked:
     text: A claim about 1903.
-    bet: observed
+    bet: { trust: observed, by: ann }
     evidence: [{ kind: account, says: I saw it., witness: me, first_hand: true }]
 `,
     [],
@@ -129,7 +129,7 @@ claims:
   const steps = nextSteps(arg, analyze(arg));
   assert.deepEqual(
     steps.filter((s) => s.decisive).map((s) => `${s.kind} ${s.claims[0]}`),
-    ['adjudicate split', 'answer rejected', 'refine vague', 'check unchecked', 'review checked'],
+    ['adjudicate split', 'answer rejected', 'refine vague', 'predict unchecked', 'review checked'],
   );
   assert.deepEqual(steps.at(-1), { kind: 'review', claims: ['c'], decisive: false, why: 'Nobody has checked that "c" follows from its support.' });
 });

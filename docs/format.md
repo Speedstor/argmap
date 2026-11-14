@@ -29,6 +29,7 @@ claims:
       trust: corroborated
       note: Where this comes from, and why you stopped here.
       cost: high                            # optional: low | medium | high
+      by: ann                               # optional: who set the label. They vouch for the bet
 
 attacks:
   - [objection, reason-a]     # if objection stands, reason-a falls
@@ -59,6 +60,13 @@ trust. Label it with how far it has been checked.
 | `corroborated` | Independent sources agree. |
 | `track-record` | This kind of claim or source has held up before. |
 | `assumed` | Not checked. |
+
+A label above `assumed` says something was checked. If nobody's name is on
+the label (`by`) and nobody has confirmed the claim in a review, it claims a
+check that nobody stands behind, so it **reads as `assumed`**: in the ranking
+of bets, in the next steps, and in the report, which shows both what it reads
+as and what was typed. The file is not changed. The engine reports this as
+`trust-unvouched`.
 
 `bet: assumed` is shorthand for `bet: { trust: assumed }`. A leaf with no bet is
 treated as `assumed` and reported with a warning. A claim cannot have both
@@ -154,6 +162,139 @@ attached evidence shows, with `evidence-against` when a trusted bet has
 evidence against it, and with `evidence-unsourced` when a record gives nothing
 to look up.
 
+## Predictions
+
+A prediction is a test of a claim, written down before the answer is known.
+
+```yaml
+claims:
+  licence-present:
+    text: At least 9 in 10 public repositories with over 1,000 stars carry a licence file.
+    bet: { trust: assumed, by: ann }      # by: who set the label, and so vouches for the bet.
+                                          # A signer can put down only their own name
+    predictions:
+      - says: Of 60 such repositories drawn at random, at least 51 have a licence file.
+        how: Draw 60 from the public list. A repository counts when a LICENSE or COPYING file is at its top level.
+        type: lookup          # lookup: the answer already exists. forecast: it does not yet
+        p: 0.8                # the setter's own chance of a yes
+        if_true: 0.97         # the chance of a yes if the claim is true (default 1)
+        if_false: 0.15        # the chance of a yes if the claim is false
+        sample: 60            # optional: how many independent cases are looked at
+        needs: 51             #           and how many must agree for a yes
+        by: ann
+        kind: person
+        made: 2026-11-14
+        due: 2026-11-28
+        rev: 357d629c17e7d67cc157cebc00c17f23   # fingerprint of the claim wording this tests; written by the tools
+        # Everything below is added later, each part once.
+        accepted:
+          - { by: ann, kind: person, date: 2026-11-14 }
+        outcome: no           # yes | no | void
+        found: 47             # with a sample: how many agreed. The outcome follows from it
+        resolved: 2026-11-20
+        resolved_by: model-x
+        resolved_kind: ai
+        source: https://example.org/sample-of-60.csv
+        confirmed:
+          - { by: ann, kind: person, date: 2026-11-21 }
+```
+
+The three chances do different jobs:
+
+- `p` scores the setter, and is used for nothing else.
+- `if_true` and `if_false` say how hard the test is. A yes that is no likelier
+  with the claim true than with it false shows nothing. Hardness is counted in
+  bits, `log2(if_true / if_false)`: one bit means a yes is twice as likely with
+  the claim true.
+
+**What a failed test does.** It knocks the claim out when three things hold:
+it tested the present wording, the claim was taken to imply a yes (`if_true` is
+0.95 or more), and someone who vouches for the claim accepted the test before
+the outcome. The claim then falls, like one you knocked out by hand, until it
+is reworded. Rewording changes the fingerprint, so the old test stops counting
+for the status and stays on the claim's record. A failed test that misses any
+of the three is evidence against the claim, and is reported as such.
+
+**What a passed test does.** Nothing to any status. It is added to what the
+claim has survived, and only if a failure would have knocked the claim out. A
+test nobody accepted, or one the claim was not taken to imply, shows nothing by
+passing, and is counted apart as passed with nothing at risk.
+
+**A test belongs to its claim.** `rev` is required, and must be the
+fingerprint of the claim the prediction is recorded on, as that claim reads
+when the prediction is made. A prediction cannot be moved or copied to another
+claim: `verify` reads that as removing it from one and recording a new one,
+with its outcome, on the other. A claim cannot be reworded or rewired while an
+accepted test of it is waiting for its outcome.
+
+**Who vouches.** Whoever is named on the bet (`bet.by`, written when a trust
+label is set), and every reviewer whose confirmation of the present wording
+stands. Anyone may set a test. If the setter vouches for the claim, setting it
+is accepting it, and `verify` refuses a voucher's test that leaves their own
+acceptance off; otherwise it waits for a voucher to accept it.
+
+**Overdue.** After the due date, anyone may add `overdue: { by, kind, date }`.
+If the test was accepted, the claim cannot stand until someone records the
+outcome. The engine has no clock: the status changes because the file did.
+
+**Samples.** For a claim about many cases, one case settles nothing. Fix
+`sample` and `needs` before looking, and say in `how` the way the cases are
+picked. Cases that rest on the same source count once. The outcome is not
+typed: it follows from `found`.
+
+**Withdrawing.** A prediction is never deleted. Its setter, and nobody else,
+can withdraw it by recording the outcome `void` with a `note`. A withdrawal is
+counted on the setter's record, counts against them in their worst-case score,
+and is shown on the claim when the test had been accepted.
+
+**Dates.** `made`, `due`, `resolved` and the date of an overdue marker are
+written as YYYY-MM-DD. `verify` checks each against the date of the commit
+that records it, give or take two days. A commit's date is set by whoever
+makes the commit, so `verify` bounds it from both sides: a commit cannot be
+dated before the commit it builds on, or after the present. That stops a
+prediction being backdated and an overdue marker being filed early. It does
+not prove a date to the day.
+
+The engine reports:
+
+- **test-failed**: a failed test knocked the claim out;
+- **test-against**: a failed test that counts only as evidence against;
+- **test-overdue**: an accepted test is marked overdue and holds the claim back;
+- **test-withdrawn**: a test was withdrawn after a voucher had accepted it;
+- **test-unvouched**: a test is waiting for someone who vouches for the claim;
+- **test-soft**: `if_false` is missing, or a yes is less than twice as likely
+  with the claim true;
+- **test-inconsistent**: `p` does not lie between `if_false` and `if_true`;
+- **credence-label**: the three chances imply the setter believes the claim
+  less than even, while labelling it `observed` or `corroborated`;
+- **test-one-case**: a claim about many cases is tested on one.
+
+`argmap verify` enforces the order. A prediction must arrive without its
+outcome, in the signer's own name, carrying the fingerprint of its claim. Its
+fixed fields (everything down to `rev`) never change, and it is never removed.
+An acceptance must come from someone who vouches for the claim, before the
+outcome. An outcome is recorded once, in the signer's name. With
+`--pull-request`, a prediction and its outcome may not arrive in the same
+range of commits, and a commit that adds to the predictions may not be dated
+before the newest commit on the base: a branch cut from an old commit would
+otherwise carry a forecast "made" long ago. Rebase first.
+
+Redefining a term in the claims library rewords every claim that pins it, so
+when a commit changes a definition there, `verify` looks at every argument
+file for a test left waiting on a reworded claim.
+
+Statuses are worked out from the files as they stand. `verify` is what makes
+the records in them worth trusting, so a status means what it says only on
+history that `verify` passes.
+
+The fingerprint is the first 32 hex digits of a SHA-256 of the claim's text,
+its support, and the definitions of the terms it pins. Redefining a word a
+claim turns on therefore makes its earlier reviews and tests stale, the same
+as rewording it. Before version 0.4 it was 8 digits of a weaker hash, for which a
+second wording with the same value can be found in minutes. Reviews recorded
+with the short one are still read; nothing writes it any more, and `verify`
+refuses a new review that carries the short one or none.
+
 ## Reviews
 
 ```yaml
@@ -170,8 +311,8 @@ claims:
 ```
 
 `rev` is written by the tools. It is a fingerprint of the claim's text and
-support, so a review of an older wording is recognised as stale and stops
-counting. A review written by hand without `rev` is treated as current. Each
+support (see the end of the Predictions section), so a review of an older
+wording is recognised as stale and stops counting. A review written by hand without `rev` is treated as current. Each
 reviewer's newest review replaces their earlier one.
 
 A claim's review state is `unreviewed`, `confirmed` (no current rejection),
@@ -184,7 +325,8 @@ changes whether a claim stands; a split claim waits for adjudication.
 log:
   - at: 2026-11-13
     by: claude-fable-5.2
-    did: refine             # create, add, refine, rewire, reword, check, evidence, review, attack, dispute
+    did: refine             # create, add, refine, rewire, reword, check, evidence, review, attack, dispute,
+                            # predict, accept, resolve, overdue, confirm
     claim: easy-coal-mined-out
     note: Why the change was made.
     verdict: contested      # the conclusion after this round

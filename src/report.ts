@@ -2,6 +2,7 @@ import { analyze, knockOut } from './analyze.ts';
 import { reason } from './evaluate.ts';
 import { resolution } from './lint.ts';
 import { nextSteps } from './next.ts';
+import { claimRecord, testability, vouchers } from './predict.ts';
 import type { Step } from './next.ts';
 import { reviewSummaries } from './review.ts';
 import { plainText } from './terms.ts';
@@ -86,7 +87,7 @@ export function formatReport(loaded: Loaded, knocked: ReadonlySet<string> = new 
     out.push(
       `  ${MARK[b.status]} ${b.id.padEnd(width)}  ${b.trust.padEnd(12)}  ${b.side.padEnd(7)}  if it fails: ${flag}${
         b.alsoChanges > 0 ? `, ${b.alsoChanges} other claim${b.alsoChanges > 1 ? 's change' : ' changes'}` : ''
-      }`,
+      }${b.labelled !== b.trust ? `  (labelled ${b.labelled}, no name on it)` : ''}`,
     );
   }
   out.push('');
@@ -100,6 +101,9 @@ export function formatReport(loaded: Loaded, knocked: ReadonlySet<string> = new 
   out.push(
     `Evidence: ${withEvidence.reduce((n, c) => n + c.evidence.length, 0)} records on ${withEvidence.length} claims. ${unbacked} trust label${unbacked === 1 ? ' is' : 's are'} not backed by the evidence attached.`,
   );
+  const tests = testability(arg);
+  out.push(`Tests: ${tests.tested} of ${tests.bets} bets have a test of their present wording. ${tests.passed} passed, ${tests.failed} failed, ${tests.open} open.`);
+  if (tests.unvouched > 0) out.push(`       ${tests.unvouched} of the bets have nobody vouching for them, so no test can knock them out.`);
   out.push(
     `Reviews: ${count('confirmed')} confirmed, ${count('rejected')} rejected, ${count('split')} split, ${count('unreviewed')} unreviewed.`,
     '',
@@ -124,6 +128,9 @@ export function formatReport(loaded: Loaded, knocked: ReadonlySet<string> = new 
 const STEP_WORD: Record<Step['kind'], string> = {
   adjudicate: 'ADJUDICATE',
   answer: 'ANSWER',
+  resolve: 'RESOLVE',
+  accept: 'ACCEPT',
+  predict: 'PREDICT',
   refine: 'REFINE',
   check: 'CHECK',
   settle: 'SETTLE',
@@ -180,6 +187,8 @@ export function toJson(loaded: Loaded, knocked: ReadonlySet<string> = new Set())
       bet: c.bet,
       origin: c.origin === '' ? 'argument' : c.origin,
       evidence: c.evidence,
+      predictions: c.predictions,
+      ...(c.predictions.length > 0 ? { tests: claimRecord(c), vouchers: vouchers(c) } : {}),
       review: reviews.get(c.id)?.state,
       reviews: c.reviews,
       reason: reason(arg, a.statuses, knocked, c.id),
@@ -187,6 +196,7 @@ export function toJson(loaded: Loaded, knocked: ReadonlySet<string> = new Set())
     bets: a.bets,
     cruxes: a.cruxes,
     resolution: { bets: res.bets, sharp: res.sharp, flags: Object.fromEntries(res.flags) },
+    tests: testability(arg),
     nextSteps: nextSteps(arg, a),
     log: arg.log,
     issues: loaded.issues,

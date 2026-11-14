@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parsePrivateKey, publicLine, SignError, sshSign } from '../src/sign.ts';
+import { claimRev } from '../src/index.ts';
 import { checkSshSignature, parseSigners, verifyRange } from '../src/verify.ts';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
@@ -84,7 +85,7 @@ test('git signs a commit through the helper, and verify attributes it', () => {
   mkdirSync(join(root, 'claims'));
   writeFileSync(
     join(root, 'claims/facts.yaml'),
-    'claims:\n  fact:\n    text: Output was 10 Mt in 2005.\n    bet: assumed\n    reviews:\n      - { by: project-key, kind: ai, verdict: confirm }\n',
+    `claims:\n  fact:\n    text: Output was 10 Mt in 2005.\n    bet: assumed\n    reviews:\n      - { by: project-key, kind: ai, verdict: confirm, rev: ${claimRev({ text: 'Output was 10 Mt in 2005.', because: [] })} }\n`,
   );
   run('add', '-A');
   run('commit', '-q', '-m', 'a signed review');

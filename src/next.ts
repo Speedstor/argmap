@@ -1,10 +1,11 @@
 import type { Analysis } from './analyze.ts';
 import { evidenceIssues } from './evidence.ts';
 import { resolution } from './lint.ts';
+import { blocks, isCurrent, knocks, vouchers } from './predict.ts';
 import { reviewSummaries } from './review.ts';
 import type { Argument } from './types.ts';
 
-export type StepKind = 'adjudicate' | 'answer' | 'refine' | 'check' | 'settle' | 'review';
+export type StepKind = 'adjudicate' | 'answer' | 'resolve' | 'accept' | 'refine' | 'predict' | 'check' | 'settle' | 'review';
 
 export interface Step {
   kind: StepKind;
@@ -15,13 +16,15 @@ export interface Step {
   why: string;
 }
 
-const ORDER: StepKind[] = ['adjudicate', 'answer', 'refine', 'check', 'settle', 'review'];
+const ORDER: StepKind[] = ['adjudicate', 'answer', 'resolve', 'accept', 'refine', 'predict', 'check', 'settle', 'review'];
 
 /**
  * What to do next, most valuable first. Steps on claims that can change the
  * conclusion come before the rest; within that, disagreements between
- * reviewers, then rejections, then hand-wavy bets, then unchecked ones, then
- * open disputes, then claims nobody has reviewed.
+ * reviewers, then rejections and failed tests, then tests waiting for an
+ * outcome or for someone to accept them, then hand-wavy bets, then bets with
+ * no test, then unchecked ones, then open disputes, then claims nobody has
+ * reviewed.
  */
 export function nextSteps(arg: Argument, analysis: Analysis): Step[] {
   const reviews = reviewSummaries(arg);
@@ -37,12 +40,51 @@ export function nextSteps(arg: Argument, analysis: Analysis): Step[] {
     steps.push({ ...step, rank });
   };
 
+  // Tests: a failure to answer, an outcome to record, or a test waiting to be accepted. Returns true when it named a step.
+  const testStep = (id: string, decisive: boolean, rank: number): boolean => {
+    const claim = arg.claims.get(id);
+    if (!claim) return false;
+    const current = claim.predictions.filter((p) => isCurrent(claim, p));
+    const base = { claims: [id] };
+    const failed = current.find((p) => knocks(claim, p));
+    if (failed) {
+      const count = failed.found !== undefined ? ` (${failed.found} of ${failed.sample}, with ${failed.needs} needed)` : '';
+      push({ ...base, kind: 'answer', decisive: true, why: `"${label(id)}" failed a test it was vouched to pass${count}, so it has fallen. Reword it to what was found, or let it fall and repair what rested on it.` }, rank);
+      return true;
+    }
+    const against = current.find((p) => p.outcome === 'no');
+    if (against) {
+      push({ ...base, kind: 'answer', decisive, why: `A test of "${label(id)}" failed: "${against.says}" It counts as evidence against. Say why the claim still holds, or reword it.` }, rank);
+      return true;
+    }
+    const late = claim.predictions.find((p) => blocks(claim, p));
+    if (late) {
+      push({ ...base, kind: 'resolve', decisive: true, why: `A test of "${label(id)}" was due on ${late.due} and has no outcome, so the claim cannot stand. Record what was found.` }, rank);
+      return true;
+    }
+    const open = current.filter((p) => p.outcome === undefined);
+    const waiting = open.find((p) => p.accepted.length === 0);
+    const backers = vouchers(claim);
+    if (waiting && backers.length > 0) {
+      push({ ...base, kind: 'accept', decisive, why: `${waiting.by} set a test of "${label(id)}": "${waiting.says}" Until ${backers.join(' or ')} accepts it, a failure cannot knock the claim out.` }, rank);
+      return true;
+    }
+    const next = open[0];
+    if (next) {
+      push({ ...base, kind: 'resolve', decisive, why: `A test of "${label(id)}" is open, due ${next.due}: "${next.says}" Check it and record what was found.` }, rank);
+      return true;
+    }
+    return false;
+  };
+
   analysis.bets.forEach((bet, rank) => {
     const claim = arg.claims.get(bet.id);
     const review = reviews.get(bet.id);
     if (!claim || !review) return;
     const base = { claims: [bet.id], decisive: bet.decisive };
     const found = flags.get(bet.id) ?? [];
+    if (review.state !== 'split' && review.state !== 'rejected' && testStep(bet.id, bet.decisive, rank)) return;
+    const tested = claim.predictions.some((p) => isCurrent(claim, p));
     if (review.state === 'split') {
       push(
         {
@@ -59,6 +101,15 @@ export function nextSteps(arg: Argument, analysis: Analysis): Step[] {
       push({ ...base, kind: 'refine', why: `"${label(bet.id)}" is hand-wavy. ${found.map((f) => f.message).join(' ')}` }, rank);
     } else if (unbacked.has(bet.id)) {
       push({ ...base, kind: 'check', why: unbacked.get(bet.id) as string }, rank);
+    } else if (!tested && (bet.trust === 'assumed' || bet.trust === 'track-record')) {
+      push(
+        {
+          ...base,
+          kind: 'predict',
+          why: `"${label(bet.id)}" is specific but has never been tested. Before you look anything up, record what you expect to find and how sure you are. Then check.`,
+        },
+        rank,
+      );
     } else if (bet.trust === 'assumed' || bet.trust === 'track-record') {
       push(
         {
@@ -96,6 +147,10 @@ export function nextSteps(arg: Argument, analysis: Analysis): Step[] {
     const review = reviews.get(claim.id);
     if (!review) continue;
     const base = { claims: [claim.id], decisive: false };
+    if (review.state !== 'split' && review.state !== 'rejected' && testStep(claim.id, false, rank)) {
+      rank++;
+      continue;
+    }
     if (review.state === 'split') {
       push({ ...base, kind: 'adjudicate', why: `Reviewers disagree on whether "${label(claim.id)}" follows from its support.` }, rank);
     } else if (review.state === 'rejected') {

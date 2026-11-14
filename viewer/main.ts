@@ -1,4 +1,4 @@
-import { analyze, attackersOf, load, nextSteps, settle, plainText, reason, resolution, reviewSummaries, segments, TRUST_LEVELS } from '../src/index.ts';
+import { analyze, attackersOf, claimRev, isCurrent, load, readsAs, nextSteps, settle, severity, plainText, reason, resolution, reviewSummaries, segments, TRUST_LEVELS } from '../src/index.ts';
 import type { Analysis, Argument, Claim, Issue, Loaded, Resolution, ReviewState, ReviewSummary, Status, StepKind, Trust } from '../src/index.ts';
 import { layout } from './layout.ts';
 import type { Box } from './layout.ts';
@@ -341,7 +341,7 @@ function renderGraph(arg: Argument, a: Analysis, available: number): HTMLElement
       },
       h('span', { class: 'node-mark', 'aria-hidden': 'true' }, state.knocked.has(claim.id) ? '⊘' : STATUS_MARK[st]),
       h('span', { class: 'node-label' }, claim.label),
-      claim.bet ? pips(claim.bet.trust) : null,
+      claim.bet ? pips(readsAs(claim)) : null,
     );
     if (claim.id === arg.conclusion) node.classList.add('node-root');
     if (state.knocked.has(claim.id)) node.classList.add('node-knocked');
@@ -410,7 +410,7 @@ function renderDetail(arg: Argument, a: Analysis, x: Extra): HTMLElement {
       h(
         'div',
         { class: 'detail-bet' },
-        h('div', { class: 'bet-trust' }, pips(claim.bet.trust), h('strong', {}, TRUST_WORD[claim.bet.trust])),
+        h('div', { class: 'bet-trust' }, pips(readsAs(claim)), h('strong', {}, TRUST_WORD[readsAs(claim)]), readsAs(claim) !== claim.bet.trust ? h('span', { class: 'review-by' }, ` labelled ${claim.bet.trust}, with no name on the label`) : null),
         claim.bet.note ? h('p', { class: 'bet-note' }, claim.bet.note) : null,
         h('p', { class: 'bet-effect' }, effect),
       ),
@@ -443,6 +443,36 @@ function renderDetail(arg: Argument, a: Analysis, x: Extra): HTMLElement {
       );
     }
     card.append(h('div', { class: 'detail-evidence' }, h('strong', {}, `Evidence (${claim.evidence.length})`), list));
+  }
+
+  if (claim.predictions.length > 0) {
+    const rev = claimRev(claim);
+    const list = h('ul', { class: 'evidence' });
+    claim.predictions.forEach((p, i) => {
+      const current = isCurrent(claim, p, rev);
+      const state = p.outcome === 'yes' ? 'passed' : p.outcome === 'no' ? 'failed' : p.outcome === 'void' ? 'withdrawn' : p.overdue ? 'overdue' : 'open';
+      const bits = severity(p);
+      const facts = [
+        `${p.by} gave it ${Math.round(p.p * 100)}%`,
+        bits !== undefined ? `hardness ${bits.toFixed(1)} bits` : 'hardness not given',
+        p.sample !== undefined ? `${p.found !== undefined ? `${p.found} of ${p.sample} agreed` : `sample of ${p.sample}`}, ${p.needs} needed` : '',
+        p.outcome === undefined ? `due ${p.due}` : `recorded by ${p.resolvedBy ?? ''}${p.resolved ? `, ${p.resolved}` : ''}`,
+        p.accepted.length > 0 ? `accepted by ${p.accepted.map((a) => a.by).join(', ')}` : 'not accepted by anyone who vouches for the claim',
+      ].filter((f) => f !== '');
+      const isUrl = p.source !== undefined && /^https?:\/\//.test(p.source);
+      list.append(
+        h(
+          'li',
+          { class: 'evidence-item', 'data-stance': state === 'failed' || state === 'overdue' ? 'against' : state === 'passed' ? 'for' : 'none' },
+          h('span', { class: 'evidence-head' }, h('span', { class: 'tag' }, `test ${i + 1}`), h('strong', {}, current ? state : `${state}, on an earlier wording`)),
+          h('span', { class: 'evidence-says' }, p.says),
+          h('span', { class: 'evidence-facts' }, facts.join(' · ')),
+          p.source ? (isUrl ? h('a', { class: 'evidence-source', href: p.source, rel: 'noopener' }, p.source) : h('span', { class: 'evidence-source' }, p.source)) : null,
+          p.note ? h('span', { class: 'review-by' }, p.note) : null,
+        ),
+      );
+    });
+    card.append(h('div', { class: 'detail-evidence' }, h('strong', {}, `Tests (${claim.predictions.length})`), list));
   }
 
   const flags = x.res.flags.get(claim.id) ?? [];
@@ -617,6 +647,9 @@ function renderBets(arg: Argument, a: Analysis, x: Extra): HTMLElement {
 const STEP_WORD: Record<StepKind, string> = {
   adjudicate: 'Adjudicate',
   answer: 'Answer',
+  resolve: 'Record the outcome',
+  accept: 'Accept the test',
+  predict: 'Predict',
   refine: 'Sharpen',
   check: 'Check',
   settle: 'Settle',

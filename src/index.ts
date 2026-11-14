@@ -1,4 +1,5 @@
 import { evidenceIssues } from './evidence.ts';
+import { predictionIssues } from './predict.ts';
 import { structureIssues } from './graph.ts';
 import { parseArgument } from './parse.ts';
 import type { LibrarySource } from './parse.ts';
@@ -6,16 +7,18 @@ import { termIssues } from './terms.ts';
 import type { Argument, Issue } from './types.ts';
 
 export * from './types.ts';
-export { parseArgument, parseFile, assemble, prettyLabel } from './parse.ts';
+export { parseArgument, parseFile, assemble, pinClaims, prettyLabel } from './parse.ts';
 export type { LibrarySource, RawFile } from './parse.ts';
-export { claimRev, reviewSummary, reviewSummaries } from './review.ts';
+export { claimRev, legacyRev, reviewIsCurrent, reviewSummary, reviewSummaries } from './review.ts';
 export type { ReviewState, ReviewSummary } from './review.ts';
 export { lintClaim, resolution } from './lint.ts';
 export type { Flag, Resolution } from './lint.ts';
 export { nextSteps } from './next.ts';
 export type { Step, StepKind } from './next.ts';
-export { toYaml, evidenceToYaml } from './serialize.ts';
+export { toYaml, evidenceToYaml, predictionToYaml } from './serialize.ts';
 export { evidenceIssues, independentSources } from './evidence.ts';
+export { blocks, claimRecord, couldKnock, describeTest, impliedCredence, IMPLIES, isCurrent, knocks, predictionIssues, readsAs, severity, SOFT_RATIO, testability, testVerdicts, vouchers } from './predict.ts';
+export type { ClaimRecord, Testability } from './predict.ts';
 export { evaluate, reason } from './evaluate.ts';
 export type { Statuses } from './evaluate.ts';
 export { analyze, knockOut, betReports, cruxSummary, settle } from './analyze.ts';
@@ -39,7 +42,7 @@ export function load(source: string, library: LibrarySource[] = []): Loaded {
   const all = [...issues];
   if (argument) {
     all.push(...termIssues(argument));
-    if (!all.some((i) => i.severity === 'error')) all.push(...structureIssues(argument), ...evidenceIssues(argument));
+    if (!all.some((i) => i.severity === 'error')) all.push(...structureIssues(argument), ...evidenceIssues(argument), ...predictionIssues(argument));
   }
   const ok = argument !== undefined && !all.some((i) => i.severity === 'error');
   return argument ? { argument, issues: all, ok } : { issues: all, ok };

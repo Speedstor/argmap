@@ -1,7 +1,7 @@
 import { parse as parseYaml } from 'yaml';
 import { termKeys } from './terms.ts';
-import { COST_LEVELS, EVIDENCE_KINDS, REVIEWER_KINDS, STANCES, TRUST_LEVELS, VERDICTS } from './types.ts';
-import type { Argument, Attack, Bet, Claim, Cost, Evidence, EvidenceKind, Issue, LogEntry, Review, ReviewerKind, Stance, Status, Term, Trust, Verdict } from './types.ts';
+import { COST_LEVELS, EVIDENCE_KINDS, OUTCOMES, PREDICTION_TYPES, REVIEWER_KINDS, STANCES, TRUST_LEVELS, VERDICTS } from './types.ts';
+import type { Argument, Attack, Bet, Claim, Cost, Evidence, EvidenceKind, Issue, LogEntry, Outcome, Prediction, PredictionType, Review, ReviewerKind, Signed, Stance, Status, Term, Trust, Verdict } from './types.ts';
 
 export interface ParseResult {
   /** Present unless the file is too broken to read at all. */
@@ -104,12 +104,14 @@ function parseBet(raw: unknown, id: string, issues: Issue[]): Bet | undefined {
   let trustRaw: unknown;
   let costRaw: unknown;
   let note: string | undefined;
+  let by: string | undefined;
   if (typeof raw === 'string') {
     trustRaw = raw;
   } else if (isDict(raw)) {
     trustRaw = raw['trust'];
     costRaw = raw['cost'];
     note = asText(raw['note']);
+    by = asText(raw['by']);
   } else {
     issues.push(err('bet-shape', `"${id}": bet must be a trust level or a mapping with trust, cost and note.`, [id]));
     return undefined;
@@ -132,7 +134,122 @@ function parseBet(raw: unknown, id: string, issues: Issue[]): Bet | undefined {
   }
   const bet: Bet = { trust, cost, explicit: true };
   if (note) bet.note = note;
+  if (by) bet.by = by;
   return bet;
+}
+
+function parseSigned(raw: unknown): Signed | undefined {
+  if (!isDict(raw)) return undefined;
+  const by = asText(raw['by']);
+  const kind = raw['kind'] ?? 'person';
+  if (!by || !(REVIEWER_KINDS as readonly unknown[]).includes(kind)) return undefined;
+  const out: Signed = { by, kind: kind as ReviewerKind };
+  const date = asText(raw['date']);
+  if (date) out.date = date;
+  return out;
+}
+
+const isDay = (text: string | undefined): text is string => text !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(text) && !Number.isNaN(Date.parse(text));
+const isChance = (v: unknown, allowOne: boolean): v is number => typeof v === 'number' && v > 0 && (allowOne ? v <= 1 : v < 1);
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+
+function parsePredictions(raw: unknown, id: string, issues: Issue[]): Prediction[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    issues.push(err('prediction-shape', `"${id}": predictions must be a list.`, [id]));
+    return [];
+  }
+  const out: Prediction[] = [];
+  raw.forEach((entry, i) => {
+    const bad = (message: string): void => {
+      issues.push(err('prediction-shape', `"${id}", prediction ${i + 1}: ${message}`, [id]));
+    };
+    if (!isDict(entry)) return bad('must be a mapping.');
+    const says = asText(entry['says']);
+    const how = asText(entry['how']);
+    const by = asText(entry['by']);
+    const made = asText(entry['made']);
+    const due = asText(entry['due']);
+    if (!says || !how) return bad('needs "says" (what will be found) and "how" (how a yes is told from a no).');
+    if (!by || !made || !due) return bad('needs "by", "made" and "due".');
+    if (!isDay(made) || !isDay(due) || due < made) return bad('made and due must be dates written as YYYY-MM-DD, with due on or after made.');
+    const rev = asText(entry['rev']);
+    if (!rev) return bad('needs "rev", the fingerprint of the claim wording it tests. The tools write it; "argmap predict" is the way to add a prediction.');
+    const type = entry['type'];
+    if (!(PREDICTION_TYPES as readonly unknown[]).includes(type)) return bad(`type must be ${PREDICTION_TYPES.join(' or ')}.`);
+    const kind = entry['kind'] ?? 'person';
+    if (!(REVIEWER_KINDS as readonly unknown[]).includes(kind)) return bad(`kind must be ${REVIEWER_KINDS.join(' or ')}.`);
+    const p = entry['p'];
+    if (!isChance(p, false)) return bad('p, the chance of a yes, must be a number above 0 and below 1.');
+    const ifTrue = entry['if_true'] ?? 1;
+    if (!isChance(ifTrue, true)) return bad('if_true must be a number above 0 and at most 1.');
+    const ifFalse = entry['if_false'];
+    if (ifFalse !== undefined && !isChance(ifFalse, false)) return bad('if_false must be a number above 0 and below 1.');
+    const item: Prediction = { says, how, type: type as PredictionType, p, ifTrue, by, kind: kind as ReviewerKind, made, due, rev, accepted: [], confirmed: [] };
+    if (ifFalse !== undefined) item.ifFalse = ifFalse;
+    const sample = entry['sample'];
+    const needs = entry['needs'];
+    if (sample !== undefined || needs !== undefined) {
+      if (!isCount(sample) || !isCount(needs) || sample < 1 || needs < 1 || needs > sample) {
+        return bad('sample and needs go together: whole numbers, with needs between 1 and sample.');
+      }
+      item.sample = sample;
+      item.needs = needs;
+    }
+    for (const key of ['accepted', 'confirmed'] as const) {
+      const list = entry[key];
+      if (list === undefined || list === null) continue;
+      if (!Array.isArray(list)) return bad(`${key} must be a list of { by, kind, date }.`);
+      for (const one of list) {
+        const signed = parseSigned(one);
+        if (!signed) return bad(`each entry in ${key} needs "by", and a kind of ${REVIEWER_KINDS.join(' or ')}.`);
+        item[key].push(signed);
+      }
+    }
+    if (entry['overdue'] !== undefined && entry['overdue'] !== null) {
+      const overdue = parseSigned(entry['overdue']);
+      if (!overdue) return bad('overdue must be { by, kind, date }.');
+      if (!isDay(overdue.date) || overdue.date <= due) return bad(`an overdue marker needs its date, written as YYYY-MM-DD and after the due date (${due}).`);
+      item.overdue = overdue;
+    }
+    const outcome = entry['outcome'];
+    if (outcome !== undefined && outcome !== null) {
+      // YAML reads a bare yes or no as true or false.
+      const word = outcome === true ? 'yes' : outcome === false ? 'no' : outcome;
+      if (!(OUTCOMES as readonly unknown[]).includes(word)) return bad(`outcome must be ${OUTCOMES.join(', ')}.`);
+      item.outcome = word as Outcome;
+      const resolvedBy = asText(entry['resolved_by']);
+      if (!resolvedBy) return bad('an outcome needs "resolved_by".');
+      item.resolvedBy = resolvedBy;
+      const resolvedKind = entry['resolved_kind'] ?? 'person';
+      if (!(REVIEWER_KINDS as readonly unknown[]).includes(resolvedKind)) return bad(`resolved_kind must be ${REVIEWER_KINDS.join(' or ')}.`);
+      item.resolvedKind = resolvedKind as ReviewerKind;
+      const resolved = asText(entry['resolved']);
+      const source = asText(entry['source']);
+      const note = asText(entry['note']);
+      if (!isDay(resolved) || resolved < made) return bad('an outcome needs "resolved", the day it was recorded, written as YYYY-MM-DD and not before the prediction was made.');
+      item.resolved = resolved;
+      if (source) item.source = source;
+      if (note) item.note = note;
+      const found = entry['found'];
+      if (found !== undefined) {
+        if (!isCount(found) || item.sample === undefined || found > item.sample) return bad('found is the number of cases that agreed, so it needs a sample and cannot exceed it.');
+        item.found = found;
+      }
+      if (item.sample !== undefined && item.outcome !== 'void') {
+        if (item.found === undefined) return bad('this prediction has a sample, so its outcome needs "found": how many cases agreed.');
+        const derived = item.found >= (item.needs as number) ? 'yes' : 'no';
+        if (derived !== item.outcome) return bad(`found ${item.found} of ${item.sample} with ${item.needs} needed makes the outcome ${derived}, not ${item.outcome}.`);
+      }
+      if (item.outcome !== 'void' && !item.source) return bad('an outcome of yes or no needs a "source" that others can open.');
+      if (item.outcome === 'void' && !item.note) return bad('a void outcome needs a "note" saying why the prediction was withdrawn.');
+    }
+    // The same prediction written twice would be scored twice.
+    const same = (x: Prediction): boolean => x.says === item.says && x.by === item.by && x.made === item.made && x.due === item.due && x.p === item.p;
+    if (out.some(same)) return bad('is the same prediction as an earlier one on this claim. Each prediction is recorded once.');
+    out.push(item);
+  });
+  return out;
 }
 
 function parseReviews(raw: unknown, id: string, issues: Issue[]): Review[] {
@@ -303,6 +420,19 @@ function parsePairs(raw: unknown, name: 'attacks' | 'disputes', issues: Issue[])
   return pairs;
 }
 
+/**
+ * Write down, on each claim, what the terms it pins are defined as. A term with
+ * no definition in reach is recorded as such, so adding one later also counts
+ * as a change.
+ */
+export function pinClaims(claims: Iterable<Claim>, terms: ReadonlyMap<string, Term>): void {
+  for (const claim of claims) {
+    const keys = [...new Set(termKeys(claim.text))].sort();
+    if (keys.length === 0) delete claim.pinned;
+    else claim.pinned = JSON.stringify(keys.map((key) => [key, terms.get(key)?.definition ?? null]));
+  }
+}
+
 /** Read one file's shape. Cross-references are checked later, once any library is merged in. */
 export function parseFile(source: string, name = ''): RawFile {
   const raw: RawFile = {
@@ -350,6 +480,7 @@ export function parseFile(source: string, name = ''): RawFile {
       let note: string | undefined;
       let reviews: Review[] = [];
       let evidence: Evidence[] = [];
+      let predictions: Prediction[] = [];
       let label = prettyLabel(id);
       if (typeof value === 'string') {
         text = value.trim();
@@ -359,6 +490,7 @@ export function parseFile(source: string, name = ''): RawFile {
         bet = parseBet(value['bet'], id, issues);
         reviews = parseReviews(value['reviews'], id, issues);
         evidence = parseEvidence(value['evidence'], id, issues);
+        predictions = parsePredictions(value['predictions'], id, issues);
         note = asText(value['note']);
         if (typeof value['label'] === 'string' && value['label'].trim() !== '') label = value['label'].trim();
       } else {
@@ -369,7 +501,7 @@ export function parseFile(source: string, name = ''): RawFile {
         issues.push(err('claim-text', `"${id}" has no text.`, [id]));
         text = id;
       }
-      const claim: Claim = { id, label, text, because, reviews, evidence, origin: name };
+      const claim: Claim = { id, label, text, because, reviews, evidence, predictions, origin: name };
       if (bet) claim.bet = bet;
       if (note) claim.note = note;
       raw.claims.set(id, claim);
@@ -378,6 +510,8 @@ export function parseFile(source: string, name = ''): RawFile {
   raw.attacks = parsePairs(doc['attacks'], 'attacks', issues);
   raw.disputes = parsePairs(doc['disputes'], 'disputes', issues);
   raw.log = parseLog(doc['log'], issues);
+  // With only this file's terms. A claim that pins a term from another file is pinned again when the files are combined.
+  pinClaims(raw.claims.values(), raw.terms);
   return raw;
 }
 
@@ -454,6 +588,8 @@ export function assemble(main: RawFile, library: RawFile[] = []): ParseResult {
       }
     }
   }
+
+  pinClaims(claims.values(), terms);
 
   // Leaves are bets; derived claims are not.
   for (const claim of claims.values()) {

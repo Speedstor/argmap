@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { relative, sep } from 'node:path';
-import { analyze, attackersOf, independentSources, lintClaim, nextSteps, parseFile, reason, resolution, reviewSummary, termKeys } from './index.ts';
+import { analyze, attackersOf, claimRecord, describeTest, readsAs, independentSources, lintClaim, nextSteps, parseFile, reason, resolution, reviewSummary, termKeys, testability, vouchers } from './index.ts';
+import { allPredictions, formatRecord, records as nameRecords } from './record.ts';
 import type { Analysis, Argument, Claim, Flag, RawFile, Resolution, Status, Step, Term } from './index.ts';
 import { isRepo, tryGit } from './git.ts';
-import { parseSigners, readSigners } from './verify.ts';
+import { parseSigners, readSigners, verifyRange } from './verify.ts';
 import { argumentFiles, libraryFiles, loadFile } from './workspace.ts';
 import type { LoadedFile } from './workspace.ts';
 
@@ -48,7 +49,10 @@ function settlements(a: Analysis): string {
 
 const KIND_NOTE: Record<Step['kind'], string> = {
   adjudicate: 'reviewers disagree, so it needs a decision',
-  answer: 'a reviewer rejected it: revise it, replace it or knock it out',
+  answer: 'a reviewer rejected it, or a test of it failed: revise it, replace it or let it fall',
+  resolve: 'a test is waiting for its outcome: check it and record what was found',
+  accept: 'someone set a test; until a voucher accepts it, a failure cannot knock the claim out',
+  predict: 'specific but never tested: before looking anything up, record what you expect to find',
   refine: 'a bet too vague to check; what is vague is listed under the claim',
   check: 'specific but unchecked, or trusted beyond its evidence: find a source or a test',
   settle: 'an open dispute: find evidence for one side, or sharpen both until they stop conflicting',
@@ -103,6 +107,30 @@ function evidenceLines(claim: Claim): string[] {
   return out;
 }
 
+/** A bet's trust as it reads, and the label as typed when the two differ. */
+function trustWords(claim: Claim): string {
+  const typed = claim.bet?.trust ?? 'assumed';
+  const read = readsAs(claim);
+  return read === typed ? `trust ${typed}${claim.bet?.by ? `, set by ${claim.bet.by}` : ''}` : `trust ${read} (labelled ${typed}, which reads as assumed because nobody's name is on the label)`;
+}
+
+function testLines(claim: Claim): string[] {
+  if (claim.predictions.length === 0) return [];
+  const r = claimRecord(claim);
+  const backers = vouchers(claim);
+  const summary = [
+    `${r.passed} passed where a failure would have knocked it out${r.passed > 0 ? ` (${r.passedFromOthers} set by someone not vouching for it; hardness ${r.bitsOthers.toFixed(1)} bits as typed by others, ${r.bitsOwn.toFixed(1)} as typed by its own vouchers)` : ''}`,
+    r.passedNoRisk > 0 ? `${r.passedNoRisk} passed with nothing at risk` : '',
+    `${r.failed} failed`,
+    `${r.open} open`,
+    r.offered > 0 ? `offered by others: ${r.offered}, accepted: ${r.offeredAccepted}` : '',
+    r.withdrawn > 0 ? `withdrawn after acceptance: ${r.withdrawn}` : '',
+    r.failedEarlier > 0 ? `failed under an earlier wording: ${r.failedEarlier}` : '',
+    `vouched for by: ${backers.length > 0 ? backers.join(', ') : 'nobody'}`,
+  ].filter((x) => x !== '');
+  return [`- tests: ${summary.join('; ')}`, ...claim.predictions.map((p, i) => `  - ${one(describeTest(claim, p, i + 1))}`)];
+}
+
 function reviewLines(claim: Claim): string[] {
   const r = reviewSummary(claim);
   if (r.current.length + r.stale.length === 0) return [];
@@ -136,7 +164,7 @@ function outline(arg: Argument, a: Analysis): { lines: string[]; order: string[]
     if (!repeat) order.push(id);
     const tags = [
       role === 'against' ? (disputed.has(`${id}|${target}`) ? 'in dispute with the claim above' : 'objection to the claim above') : '',
-      claim.bet ? `bet: ${claim.bet.trust}` : '',
+      claim.bet ? `bet: ${readsAs(claim)}` : '',
       repeat ? 'shown above' : '',
     ].filter((x) => x !== '');
     lines.push(`${'  '.repeat(depth)}- ${a.statuses.get(id) ?? 'contested'} ${code(id)}${tags.length > 0 ? ` (${tags.join('; ')})` : ''}`);
@@ -178,7 +206,7 @@ function argumentClaim(arg: Argument, a: Analysis, claim: Claim, res: Resolution
   const holdsUp = [...arg.claims.values()].filter((c) => c.because.some((g) => g.includes(id))).map((c) => c.id);
   const bet = a.bets.find((b) => b.id === id);
   const out = [`### ${id}`, '', `- status: ${a.statuses.get(id) ?? 'contested'}${why(arg, a, id)}`];
-  out.push(`- kind: ${claim.bet ? `bet, trust ${claim.bet.trust}, cost ${claim.bet.cost}${claim.bet.explicit ? '' : ' (no bet written, so assumed)'}` : 'supported'}`);
+  out.push(`- kind: ${claim.bet ? `bet, ${trustWords(claim)}, cost ${claim.bet.cost}${claim.bet.explicit ? '' : ' (no bet written, so assumed)'}` : 'supported'}`);
   out.push(`- text: ${one(claim.text)}`);
   if (claim.because.length > 0) out.push(`- rests on: ${support(claim)}`);
   if (holdsUp.length > 0) out.push(`- holds up: ${ids(holdsUp)}`);
@@ -189,7 +217,7 @@ function argumentClaim(arg: Argument, a: Analysis, claim: Claim, res: Resolution
   if (claim.origin !== '') out.push(`- library: defined in ${code(claim.origin)}`);
   if (claim.bet?.note) out.push(`- stops here because: ${one(claim.bet.note)}`);
   if (claim.note) out.push(`- note: ${one(claim.note)}`);
-  out.push(...flagLines(res?.flags.get(id) ?? []), ...reviewLines(claim), ...evidenceLines(claim), '');
+  out.push(...flagLines(res?.flags.get(id) ?? []), ...reviewLines(claim), ...evidenceLines(claim), ...testLines(claim), '');
   return out;
 }
 
@@ -229,6 +257,8 @@ function argumentPage(root: string, entry: Entry): string {
   out.push(`- claims: ${arg.claims.size}, of which ${entry.res?.bets ?? 0} are bets and ${entry.res?.sharp ?? 0} of those are specific enough to check`);
   out.push(`- evidence: ${count(withEvidence.reduce((n, c) => n + c.evidence.length, 0), 'record')} on ${count(withEvidence.length, 'claim')}`);
   out.push(`- reviews: ${reviewed} of ${arg.claims.size} claims reviewed`);
+  const tests = testability(arg);
+  out.push(`- tests: ${tests.tested} of ${tests.bets} bets have a test of their present wording; ${tests.passed} passed, ${tests.failed} failed, ${tests.open} open; ${tests.unvouched} bets have nobody vouching for them, so no test can knock them out`);
   out.push(`- rounds: ${arg.log.length}${last ? `, last on ${last.at}` : ''}`);
   out.push(`- warnings: ${warnings.length}`, '');
 
@@ -292,7 +322,7 @@ function libraryPage(root: string, library: RawFile[], entries: Entry[]): string
         const there = e.loaded.argument?.claims.get(id);
         return there && there.origin !== '' ? [`${code(e.file)} (${e.analysis?.statuses.get(id) ?? 'not computed'} there)`] : [];
       });
-      out.push(`### ${id}`, '', `- kind: ${claim.bet ? `bet, trust ${claim.bet.trust}, cost ${claim.bet.cost}` : 'supported'}`, `- text: ${one(claim.text)}`);
+      out.push(`### ${id}`, '', `- kind: ${claim.bet ? `bet, ${trustWords(claim)}, cost ${claim.bet.cost}` : 'supported'}`, `- text: ${one(claim.text)}`);
       if (claim.because.length > 0) out.push(`- rests on: ${support(claim)}`);
       if (holdsUp.length > 0) out.push(`- holds up: ${ids(holdsUp)}`);
       if (objectsTo.length > 0) out.push(`- objects to: ${ids(objectsTo)}`);
@@ -301,10 +331,38 @@ function libraryPage(root: string, library: RawFile[], entries: Entry[]): string
       out.push(`- used in: ${used.length > 0 ? used.join(', ') : 'no argument'}`);
       if (claim.bet?.note) out.push(`- stops here because: ${one(claim.bet.note)}`);
       if (claim.note) out.push(`- note: ${one(claim.note)}`);
-      out.push(...flagLines(claim.bet ? lintClaim(claim) : []), ...reviewLines(claim), ...evidenceLines(claim), '');
+      out.push(...flagLines(claim.bet ? lintClaim(claim) : []), ...reviewLines(claim), ...evidenceLines(claim), ...testLines(claim), '');
     }
   }
   return out.join('\n');
+}
+
+/**
+ * Whether the history behind this digest passes "argmap verify". Statuses are
+ * worked out from the files as they stand, so a reader needs to know whether
+ * those files got here by commits that verify refuses.
+ */
+function historyCheck(root: string): string[] {
+  if (!isRepo(root) || tryGit(root, ['rev-parse', '--verify', '--quiet', 'HEAD']) === undefined) return [];
+  if (tryGit(root, ['rev-parse', '--is-shallow-repository']) === 'true') {
+    return ['Not run: this copy of the repository does not hold its full history, so the commits cannot be checked.'];
+  }
+  const signers = parseSigners(readSigners(root).text);
+  if (signers.length === 0) return ['Not run: there is no list of trusted keys to check signatures against.'];
+  let checks: ReturnType<typeof verifyRange>;
+  try {
+    checks = verifyRange(root, 'HEAD', signers);
+  } catch {
+    return ['Not run: the history could not be read.'];
+  }
+  const refused = checks.filter((c) => c.problems.length > 0);
+  if (refused.length === 0) return [`All ${count(checks.length, 'commit')} pass ${code('argmap verify')}. Every status in this digest rests on history that verify accepts.`];
+  return [
+    `${refused.length} of ${count(checks.length, 'commit')} are refused by ${code('argmap verify')}. The statuses in this digest are worked out from the files as they stand, and those files include what these commits did:`,
+    '',
+    ...refused.slice(0, 20).map((c) => `- ${code(c.commit.slice(0, 7))} ${one(c.subject)}: ${one(c.problems[0] ?? '')}${c.problems.length > 1 ? ` (and ${c.problems.length - 1} more)` : ''}`),
+    ...(refused.length > 20 ? [`- and ${refused.length - 20} more commits`] : []),
+  ];
 }
 
 function indexPage(root: string, entries: Entry[], library: RawFile[]): string {
@@ -322,9 +380,10 @@ function indexPage(root: string, entries: Entry[], library: RawFile[]): string {
     '- A claim with no review line has not been reviewed.',
     '- Notepads are not here. They are plain Markdown on the `ideas` branch: `ideas/<argument file name>.md` and `ideas/claims/<claim id>.md`.',
     '',
-    '## Arguments',
-    '',
   ];
+  const history = historyCheck(root);
+  if (history.length > 0) out.push('## History check', '', ...history, '');
+  out.push('## Arguments', '');
   if (entries.length === 0) out.push('None yet.', '');
   for (const e of entries) {
     const arg = e.loaded.argument;
@@ -379,6 +438,12 @@ function indexPage(root: string, entries: Entry[], library: RawFile[]): string {
     return `${count(r.reviews, 'review')}, ${count(r.evidence, 'evidence record')}, ${count(r.rounds, 'round')}`;
   };
   const source = signers.length > 0 || !list.from.startsWith('nowhere') ? `read from ${code(list.from)}` : 'but there is no allowed_signers file';
+  // What each name's predictions show. Scores are split by kind of prediction and never rolled into one number.
+  const scored = nameRecords(allPredictions(root));
+  out.push('## Records', '', 'What each name\'s predictions show. A record is split into lookups (the answer already existed) and forecasts by how long they ran, because skill at one says little about the other. It sits beside the trust labels and never sets one.', '');
+  if (scored.length === 0) out.push('Nobody has set a prediction yet.', '');
+  for (const r of scored) out.push('```', formatRecord(r), '```', '');
+
   out.push('## Trusted keys', '', `Who can put a judgment on record, ${source}. Record work under the name of the key that signs the commit.`, '');
   for (const s of signers) out.push(`- ${code(s.name)} (${s.kind === 'unknown' ? 'kind not stated' : s.kind})${s.label ? `, ${one(s.label)}` : ''}: ${row(s.name)}`);
   if (signers.length === 0) out.push('The list is empty, so no commit can be attributed to anyone.');

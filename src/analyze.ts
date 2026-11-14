@@ -1,4 +1,5 @@
 import { evaluate, reason } from './evaluate.ts';
+import { readsAs } from './predict.ts';
 import type { Statuses } from './evaluate.ts';
 import { sides } from './graph.ts';
 import type { Side } from './graph.ts';
@@ -15,7 +16,10 @@ export interface Change {
 
 export interface BetReport {
   id: string;
+  /** What the trust label reads as: the label as typed, or assumed when nobody's name is behind a higher one. */
   trust: Trust;
+  /** The label as typed in the file. */
+  labelled: Trust;
   cost: Cost;
   side: Side;
   /** The bet's own status right now. */
@@ -78,7 +82,8 @@ export function betReports(arg: Argument, knocked: ReadonlySet<string>, base: St
     const conclusionIfFails = statuses.get(arg.conclusion) as Status;
     reports.push({
       id: claim.id,
-      trust: claim.bet.trust,
+      trust: readsAs(claim),
+      labelled: claim.bet.trust,
       cost: claim.bet.cost,
       side: side.get(claim.id) ?? 'none',
       status: base.get(claim.id) as Status,

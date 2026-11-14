@@ -220,3 +220,36 @@ test('notepads are created on request, live on the ideas branch, and are read wi
   assert.ok(!git('ls-tree', '-r', '--name-only', 'main').includes('ideas/'));
   assert.ok(git('ls-tree', '-r', '--name-only', 'ideas').includes(`ideas/${ARG}.md`));
 });
+
+test('a prediction is recorded before checking, and a failed test knocks out the claim that was vouched to pass it', async () => {
+  // A new question, so the test does not lean on the mapped argument.
+  const A = 'licences';
+  await call('create_argument', { name: A, title: 'Do popular repositories carry a licence?', conclusion_id: 'licence-present', conclusion_text: 'At least 9 in 10 public repositories with over 1,000 stars carry a licence file.', by: 'ann' });
+  // Setting the trust label puts ann's name on the bet: she vouches for it.
+  const labelled = await call('set_bet', { argument: A, id: 'licence-present', trust: 'assumed', by: 'ann' });
+  assert.ok(!labelled.error, labelled.text);
+  const due = new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10);
+  const guess = { argument: A, id: 'licence-present', how: 'A repository counts when a LICENSE or COPYING file is at its top level.', type: 'lookup', if_false: 0.15, if_true: 0.97, sample: 60, due };
+  const made = await call('predict', { ...guess, says: 'Of 60 such repositories drawn at random, at least 51 have a licence file.', p: 0.8, needs: 51, by: 'ann', kind: 'person' });
+  assert.ok(!made.error, made.text);
+  assert.equal(made.json.conclusion, 'stands');
+  const offered = await call('predict', { ...guess, says: 'Of 60 more, at least 57 have one.', p: 0.3, needs: 57, by: 'model-x', kind: 'ai' });
+  assert.ok(offered.json.warnings.some((w: string) => /waiting for ann to accept it/.test(w)), offered.text);
+  assert.ok((await call('accept_test', { argument: A, id: 'licence-present', n: 2, by: 'model-x', kind: 'ai' })).error);
+  assert.ok(!(await call('accept_test', { argument: A, id: 'licence-present', n: 2, by: 'ann', kind: 'person' })).error);
+
+  const open = (await call('due_predictions', { on: due })).json;
+  assert.deepEqual(open.due.map((d: { n: number; days_late: number }) => [d.n, d.days_late]), [[1, 0], [2, 0]]);
+
+  const wrong = await call('resolve_prediction', { argument: A, id: 'licence-present', n: 1, outcome: 'yes', found: 47, source: 'https://example.org/sample-of-60.csv', by: 'model-x', kind: 'ai' });
+  assert.ok(wrong.error);
+  const found = await call('resolve_prediction', { argument: A, id: 'licence-present', n: 1, found: 47, source: 'https://example.org/sample-of-60.csv', by: 'model-x', kind: 'ai' });
+  assert.equal(found.json.conclusion, 'falls');
+  const report = (await call('report', { argument: A })).json;
+  assert.match(report.claims[0].reason, /Failed a test it was vouched to pass/);
+  assert.deepEqual([report.tests.tested, report.tests.failed, report.tests.open], [1, 1, 1]);
+  assert.equal(report.nextSteps[0].kind, 'answer');
+
+  const record = (await call('prediction_record', { name: 'ann' })).json;
+  assert.deepEqual([record[0].set, record[0].buckets[0].scored, record[0].resolvedByOthers], [1, 1, 1]);
+});

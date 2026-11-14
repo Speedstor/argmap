@@ -177,9 +177,12 @@ test('the civilization argument loads and hinges on three disputes', () => {
   assert.ok(loaded.ok, JSON.stringify(loaded.issues, null, 2));
   const codes = loaded.issues.map((i) => i.code);
   assert.deepEqual(
-    codes.filter((c) => c !== 'trust-unbacked'),
+    codes.filter((c) => c !== 'trust-unbacked' && c !== 'trust-unvouched'),
     ['sense-clash'],
   );
+  // No label in the fixture carries a name, so each one above assumed reads as assumed, and says so.
+  assert.equal(codes.filter((c) => c === 'trust-unvouched').length, 8);
+  assert.ok(analyze(loaded.argument as Argument).bets.every((b) => b.trust === 'assumed'));
   // The fixture labels bets without attaching the evidence, and says so.
   assert.equal(codes.filter((c) => c === 'trust-unbacked').length, 8);
   const a = analyze(loaded.argument as Argument);

@@ -1,6 +1,6 @@
 import { Document, isScalar, isSeq, visit } from 'yaml';
 import { prettyLabel } from './parse.ts';
-import type { Argument, Evidence } from './types.ts';
+import type { Argument, Evidence, Prediction, Signed } from './types.ts';
 
 /** Evidence as it is written in a file: snake_case keys, defaults left out. */
 export function evidenceToYaml(e: Evidence): Record<string, unknown> {
@@ -11,6 +11,31 @@ export function evidenceToYaml(e: Evidence): Record<string, unknown> {
   if (e.firstHand !== undefined) out['first_hand'] = e.firstHand;
   if (e.peerReviewed !== undefined) out['peer_reviewed'] = e.peerReviewed;
   for (const key of ['source', 'origin', 'by', 'date'] as const) if (e[key] !== undefined) out[key] = e[key];
+  return out;
+}
+
+const signedToYaml = (s: Signed): Record<string, unknown> => ({ by: s.by, kind: s.kind, ...(s.date ? { date: s.date } : {}) });
+
+/** A prediction as it is written in a file: the fixed part first, then what was added later. */
+export function predictionToYaml(p: Prediction): Record<string, unknown> {
+  const out: Record<string, unknown> = { says: p.says, how: p.how, type: p.type, p: p.p };
+  if (p.ifTrue !== 1) out['if_true'] = p.ifTrue;
+  if (p.ifFalse !== undefined) out['if_false'] = p.ifFalse;
+  if (p.sample !== undefined) Object.assign(out, { sample: p.sample, needs: p.needs });
+  Object.assign(out, { by: p.by, kind: p.kind, made: p.made, due: p.due });
+  if (p.rev !== undefined) out['rev'] = p.rev;
+  if (p.accepted.length > 0) out['accepted'] = p.accepted.map(signedToYaml);
+  if (p.overdue) out['overdue'] = signedToYaml(p.overdue);
+  if (p.outcome !== undefined) {
+    out['outcome'] = p.outcome;
+    if (p.found !== undefined) out['found'] = p.found;
+    if (p.resolved) out['resolved'] = p.resolved;
+    out['resolved_by'] = p.resolvedBy;
+    out['resolved_kind'] = p.resolvedKind;
+    if (p.source) out['source'] = p.source;
+    if (p.note) out['note'] = p.note;
+  }
+  if (p.confirmed.length > 0) out['confirmed'] = p.confirmed.map(signedToYaml);
   return out;
 }
 
@@ -33,10 +58,12 @@ export function toYaml(arg: Argument): string {
       const bet: Record<string, unknown> = { trust: claim.bet.trust };
       if (claim.bet.cost !== 'medium') bet['cost'] = claim.bet.cost;
       if (claim.bet.note) bet['note'] = claim.bet.note;
+      if (claim.bet.by) bet['by'] = claim.bet.by;
       out['bet'] = bet;
     }
     if (claim.note) out['note'] = claim.note;
     if (claim.evidence.length > 0) out['evidence'] = claim.evidence.map(evidenceToYaml);
+    if (claim.predictions.length > 0) out['predictions'] = claim.predictions.map(predictionToYaml);
     if (claim.reviews.length > 0) out['reviews'] = claim.reviews;
     claims[claim.id] = out;
   }
