@@ -17,7 +17,10 @@ export interface Signer {
   kind: 'person' | 'ai' | 'unknown';
   /** The public key, base64, as it appears in the list. */
   key: string;
-  /** The comment after the key, if any: a free description of which key this is. */
+  /**
+   * The comment after the key, if any: a description of which key this is.
+   * It is free text, except that a label starting with the word "owner" marks an owner (see isOwner).
+   */
   label?: string;
 }
 
@@ -49,6 +52,135 @@ export function parseSigners(text: string): Signer[] {
     }
   }
   return out;
+}
+
+/**
+ * An owner is a line whose label starts with the word "owner", followed by a
+ * space or nothing. The list is the membership of a repository, and an owner is
+ * who decides it: only an owner may remove or change a line (see listProblems).
+ */
+export const isOwner = (signer: Signer | undefined): boolean => /^owner(\s|$)/.test(signer?.label ?? '');
+
+/** A line of the list as one string, so that any change to its name, key or label shows. */
+const lineOf = (s: Signer): string => JSON.stringify([s.principal, s.key, s.label ?? '']);
+
+/**
+ * What a commit starts from. `keep` is what it has to still hold, and `allow`
+ * is what it may hold without that counting as new.
+ */
+export interface Start<T> {
+  keep: T[];
+  allow: T[];
+}
+
+/**
+ * Work out what a commit starts from, given what each parent holds and what
+ * the parents' common ancestors hold.
+ *
+ * With one parent it is simply what that parent holds. A merge is the hard
+ * case. Asking only "did every parent have it?" lets a merge with an old commit
+ * hide a removal, because the old commit never had the line; and asking only
+ * "did any parent have it?" lets the same merge bring back what was taken out
+ * since. So a merge is judged the way git merges: a thing both sides hold, or
+ * one side added since the common ancestor, belongs in the result. A thing the
+ * ancestor held and one side no longer does was taken out by that side, and
+ * does not belong.
+ *
+ * When there are several common ancestors, or none, the stricter reading is
+ * used each way.
+ */
+export function startingPoint<T>(parents: T[][], bases: T[][], key: (item: T) => string): Start<T> {
+  if (parents.length <= 1) {
+    const only = parents[0] ?? [];
+    return { keep: only, allow: only };
+  }
+  const keysOf = (lists: T[][]): Set<string>[] => lists.map((list) => new Set(list.map(key)));
+  const inParents = keysOf(parents);
+  const inBases = keysOf(bases);
+  const everyParent = (k: string): boolean => inParents.every((set) => set.has(k));
+  const everyBase = (k: string): boolean => inBases.length > 0 && inBases.every((set) => set.has(k));
+  const anyBase = (k: string): boolean => inBases.some((set) => set.has(k));
+  const seen = new Set<string>();
+  const start: Start<T> = { keep: [], allow: [] };
+  for (const item of parents.flat()) {
+    const k = key(item);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    if (everyParent(k) || !everyBase(k)) start.keep.push(item);
+    if (everyParent(k) || !anyBase(k)) start.allow.push(item);
+  }
+  return start;
+}
+
+/**
+ * Why a line that someone other than an owner added cannot stand, if it cannot.
+ * `present` is every list the line would sit in, and `past` every line that was
+ * ever listed in the history behind it.
+ */
+function newLineProblem(s: Signer, present: Signer[], past: Signer[], who: string): string | undefined {
+  const others = present.filter((x) => lineOf(x) !== lineOf(s));
+  // Names that differ only in capitals read as one name, so they are treated as one.
+  const sameName = (x: Signer): boolean => x.name.toLowerCase() === s.name.toLowerCase();
+  if (isOwner(s)) return `${SIGNERS_FILE}: ${who} added ${s.principal} as an owner. Only an owner can name an owner.`;
+  if (others.some(sameName)) {
+    return `${SIGNERS_FILE}: ${who} added another key under the name "${s.name}", which is already on the list. Only an owner can give a name a second key.`;
+  }
+  const sameKey = others.find((x) => x.key === s.key);
+  if (sameKey) return `${SIGNERS_FILE}: ${who} added ${s.principal} with a key that is already on the list as ${sameKey.principal}. Only an owner can put a key under another name.`;
+  // A name can be made to look like another one with capitals, look-alike letters or characters that do not show.
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(s.name)) {
+    return `${SIGNERS_FILE}: ${who} added the name "${s.name}". A name added by anyone but an owner is plain: lowercase letters, digits, dots and hyphens, ending in @person or @ai.`;
+  }
+  // A removal has to stick. The old reviews still carry the name, so whoever is listed under it next signs as their author.
+  if (past.some(sameName)) {
+    return `${SIGNERS_FILE}: ${who} added the name "${s.name}", which was on the list before and was taken off. Only an owner can bring a name back.`;
+  }
+  const oldKey = past.find((x) => x.key === s.key);
+  if (oldKey) return `${SIGNERS_FILE}: ${who} added ${s.principal} with a key that was on the list before as ${oldKey.principal}. Only an owner can bring a key back.`;
+  return undefined;
+}
+
+export interface ListContext {
+  /** The list the commit's lines will join when that is not its own parent's: the base of a pull request. */
+  joins?: Signer[];
+  /** Every line that was ever on the list in the history behind the commit. Asked for only when a line was added. */
+  past?: () => Signer[];
+}
+
+/**
+ * Who may change the list of trusted keys. The list says which key signs as
+ * which name, so whoever can edit it freely can sign as anyone: add a second
+ * key under a listed name, and that key's commits count as that name's.
+ *
+ * Anyone on the list may invite: add a line whose name and key are both new,
+ * and were never on the list before. Everything else is an owner's to do:
+ * removing a line, changing one, giving a listed name another key, putting a
+ * listed key under another name, bringing back a name or key that was taken
+ * off, and naming an owner.
+ *
+ * `start` is what the commit starts from (see startingPoint), `after` the list
+ * in the commit, and `signer` who signed it. A list that names no owner is not
+ * held to this rule, because there would be nobody who could change it.
+ */
+export function listProblems(start: Start<Signer>, after: Signer[], signer: Signer, trusted: Signer[], context: ListContext = {}): string[] {
+  if (isOwner(signer) || !trusted.some(isOwner)) return [];
+  const has = (list: Signer[], s: Signer): boolean => list.some((x) => lineOf(x) === lineOf(s));
+  const dropped = start.keep.filter((s) => !has(after, s));
+  const added = after.filter((s) => !has(start.allow, s));
+  const problems: string[] = [];
+  const who = signer.principal;
+  for (const s of dropped) {
+    const still = after.some((x) => x.principal === s.principal);
+    problems.push(`${SIGNERS_FILE}: the line for ${s.principal} was ${still ? 'changed' : 'removed'} by ${who}. Only an owner can change or remove a line.`);
+  }
+  const present = [...start.keep, ...start.allow, ...(context.joins ?? [])];
+  for (const s of added) {
+    // A changed line shows as one dropped and one added. It is reported once, above.
+    if (dropped.some((x) => x.principal === s.principal)) continue;
+    const problem = newLineProblem(s, present, context.past?.() ?? [], who);
+    if (problem) problems.push(problem);
+  }
+  return problems;
 }
 
 /** Split a raw commit into what was signed and the signature attached to it. */
@@ -353,6 +485,19 @@ function added(before: string[], after: string[]): string[] {
  * mergeKind). A merge that was edited is treated like any other commit: it
  * needs a trusted signature, and what it adds beyond its parents must be in the
  * signer's name.
+ *
+ * A commit that changes the list of trusted keys is held to listProblems:
+ * anyone listed may add a new name, and only an owner may do anything else.
+ * Who is an owner is read from `signers`, the list the range is judged by, and
+ * never from the commit itself, so a commit cannot make its own signer an owner.
+ *
+ * What a merge adds or takes away is measured from what its parents and their
+ * common ancestors give between them (see startingPoint), for the list and for
+ * reviews, evidence, log entries and trust labels alike. A merge is also where
+ * the lines members added on one side meet the list on the other, and they are
+ * tested against it there. When the range is written base..head, they are tested
+ * against the list at the base as well, which is how a pull request is checked
+ * before any merge exists.
  */
 export interface VerifyOptions {
   /** Refuse a prediction and its outcome in the same range. For a pull request: the prediction must be on main first. */
@@ -391,9 +536,76 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
   };
   /** Predictions first recorded inside this range, with the commit that brought each in. */
   const born = new Map<string, string>();
+
+  const parentsOf = (rev: string): string[] => git(root, ['log', '-1', '--format=%P', rev]).split(' ').filter(Boolean);
+  /** The common ancestors of a merge's parents: what both sides started from. An ordinary commit has none to ask about. */
+  const basesOf = (parents: string[]): string[] =>
+    parents.length < 2 ? [] : (tryGit(root, ['merge-base', '--all', ...(parents.length > 2 ? ['--octopus'] : []), ...parents]) ?? '').split('\n').filter(Boolean);
+  const lists = new Map<string, Signer[]>();
+  const listAt = (rev: string): Signer[] => {
+    let list = lists.get(rev);
+    if (!list) lists.set(rev, (list = parseSigners(tryGit(root, ['show', `${rev}:${SIGNERS_FILE}`]) ?? '')));
+    return list;
+  };
+  /** Every line that was ever on the list, in the history behind these commits. A removal has to stick, so new lines are tested against it. */
+  const everListed = (revs: string[]): Signer[] =>
+    (tryGit(root, ['log', '--full-history', '--format=%H', ...revs, '--', SIGNERS_FILE]) ?? '').split('\n').filter(Boolean).flatMap(listAt);
+  /** Who signed a commit, if the signature is good and the key is on the list; and if not, why not. */
+  const signatures = new Map<string, { signer?: Signer; unsigned: string[] }>();
+  const signatureOf = (rev: string): { signer?: Signer; unsigned: string[] } => {
+    let found = signatures.get(rev);
+    if (found) return found;
+    found = { unsigned: [] };
+    const { payload, signature } = splitCommit(gitBuffer(root, ['cat-file', 'commit', rev]));
+    if (!signature) found.unsigned.push('not signed');
+    else {
+      const result = checkSshSignature(payload, signature);
+      const signer = result.ok ? byKey.get(result.key as string) : undefined;
+      if (!result.ok) found.unsigned.push(result.problem ?? 'bad signature');
+      else if (signer) found.signer = signer;
+      else found.unsigned.push('signed with a key that is not on the list');
+    }
+    signatures.set(rev, found);
+    return found;
+  };
+  // New lines on the list are tested against the list they will join. For a range written base..head that is the
+  // base: a branch cut before a name was listed would otherwise add that name again, with another key.
+  const rangeBase = /^[^.]+\.\.[^.]+$/.test(range) ? (range.split('..')[0] as string) : undefined;
+  const joinBase = rangeBase !== undefined && refExists(root, rangeBase) ? rangeBase : undefined;
+  /**
+   * A merge is where the lines added on one side meet the list on the other. A member's own commit is tested against
+   * the list on its own branch, which may be older than the one it joins: cut a branch before a name is listed, add
+   * that name with another key, and neither side sees a clash. So at every merge, each line a member added on one
+   * side is tested against the list on the other.
+   */
+  const broughtIn = (merge: string, parents: string[]): string[] => {
+    if (!signers.some(isOwner)) return [];
+    const merged = listAt(merge);
+    const isIn = (list: Signer[], s: Signer): boolean => list.some((x) => lineOf(x) === lineOf(s));
+    const problems = new Set<string>();
+    for (const onto of parents) {
+      const target = listAt(onto);
+      if (merged.every((s) => isIn(target, s))) continue;
+      for (const from of parents.filter((p) => p !== onto)) {
+        for (const rev of git(root, ['rev-list', '--reverse', `${onto}..${from}`]).split('\n').filter(Boolean)) {
+          // A commit with no parent is tested too: a second beginning, merged in, would otherwise carry any list it liked.
+          const before = parentsOf(rev);
+          const { signer } = signatureOf(rev);
+          if (!signer || isOwner(signer)) continue;
+          const start = startingPoint(before.map(listAt), basesOf(before).map(listAt), lineOf);
+          for (const s of listAt(rev)) {
+            if (isIn(start.allow, s) || !isIn(merged, s) || isIn(target, s)) continue;
+            const problem = newLineProblem(s, target, everListed([onto]), signer.principal);
+            if (problem) problems.add(`${problem} The line arrives with this merge, from ${rev.slice(0, 7)}.`);
+          }
+        }
+      }
+    }
+    return [...problems];
+  };
   for (const commit of commits) {
     const check: CommitCheck = { commit, subject: git(root, ['log', '-1', '--format=%s', commit]), problems: [] };
-    const parents = git(root, ['log', '-1', '--format=%P', commit]).split(' ').filter(Boolean);
+    const parents = parentsOf(commit);
     const merge = parents.length > 1 ? mergeKind(root, commit, parents) : undefined;
     if (merge) check.merge = merge.kind;
 
@@ -404,26 +616,30 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
     if (dated < newest - SKEW_SECONDS) check.problems.push(`dated ${day(dated)}, before the commit it builds on (${day(newest)}). A commit cannot be older than its parent.`);
     if (options.notAfter !== undefined && dated > options.notAfter + SKEW_SECONDS) check.problems.push(`dated ${day(dated)}, which has not happened yet.`);
 
-    const unsigned: string[] = [];
-    const { payload, signature } = splitCommit(gitBuffer(root, ['cat-file', 'commit', commit]));
-    if (!signature) {
-      unsigned.push('not signed');
-    } else {
-      const result = checkSshSignature(payload, signature);
-      if (!result.ok) unsigned.push(result.problem ?? 'bad signature');
-      else {
-        const signer = byKey.get(result.key as string);
-        if (signer) check.signer = signer;
-        else unsigned.push('signed with a key that is not on the list');
-      }
-    }
+    const signed = signatureOf(commit);
+    const unsigned = signed.unsigned;
+    if (signed.signer) check.signer = signed.signer;
     if (merge?.kind !== 'clean') {
       check.problems.push(...unsigned);
       if (merge && unsigned.length > 0) check.problems.push(`this merge needs a trusted signature, because ${merge.why}`);
     }
+    // An owner who signs a merge has settled what the list holds. Any other merge answers for the lines that meet in it.
+    if (merge && !(merge.kind === 'edited' && isOwner(signed.signer))) check.problems.push(...broughtIn(commit, parents));
 
     const signer = check.signer;
     if (signer && merge?.kind !== 'clean') {
+      // What a merge starts from is worked out from its parents and what they both started from (see startingPoint).
+      const bases = basesOf(parents);
+      // The list of trusted keys is membership, so a change to it has a rule of its own. The first commit has nothing to change.
+      if (parents.length > 0) {
+        check.problems.push(
+          ...listProblems(startingPoint(parents.map(listAt), bases.map(listAt), lineOf), listAt(commit), signer, signers, {
+            joins: joinBase ? listAt(joinBase) : [],
+            past: () => everListed(joinBase ? [...parents, joinBase] : parents),
+          }),
+        );
+      }
+
       // With -m a merge is compared with each parent in turn; an ordinary commit has one.
       const tracked = (path: string): boolean => /^(arguments|claims)\/.*\.ya?ml$/.test(path);
       let changed = [...new Set(git(root, ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-m', commit]).split('\n').filter(tracked))];
@@ -437,8 +653,9 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
       const hadPredictions = new Map<string, Tracked>();
       const hasPredictions = new Map<string, Tracked>();
       const commitDay = day(dated);
-      /** Trust labels across every file the commit touches: before (one map per parent) and now. */
+      /** Trust labels across every file the commit touches: before (one map per parent, and one per common ancestor) and now. */
       const labelsBefore = parents.map(() => new Map<string, { trust: string; by?: string }>());
+      const labelsAtBase = bases.map(() => new Map<string, { trust: string; by?: string }>());
       const labelsNow = new Map<string, { trust: string; by?: string }>();
       /** Claims that exist now and rest on other claims, so are no longer bets. */
       const supportedNow = new Set<string>();
@@ -456,8 +673,12 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
         track(now, hasPredictions);
         for (const issue of now?.issues ?? []) if (issue.code === 'prediction-shape') check.problems.push(`${path}: ${issue.message}`);
 
+        const atBase = bases.map(read);
         was.forEach((file, at) => {
           for (const [id, label] of labels(file)) (labelsBefore[at] as Map<string, { trust: string; by?: string }>).set(id, label);
+        });
+        atBase.forEach((file, at) => {
+          for (const [id, label] of labels(file)) (labelsAtBase[at] as Map<string, { trust: string; by?: string }>).set(id, label);
         });
         for (const [id, label] of labels(now)) labelsNow.set(id, label);
         for (const claim of now?.claims.values() ?? []) if (claim.because.length > 0) supportedNow.add(claim.id);
@@ -465,13 +686,13 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
 
         const after = recordsOf(now);
         const earlierRecords = was.map(recordsOf);
-        // What was already on record in any parent is not new, so a merge answers only for what it adds itself.
-        const known = (kind: 'reviews' | 'evidence' | 'log'): string[] => earlierRecords.flatMap((r) => r[kind]);
-        // What a commit takes away: on record in every parent, and gone now. A signer can take back only their own.
-        const gone = (kind: 'reviews' | 'evidence' | 'log'): string[] => {
-          const perParent = earlierRecords.map((r) => added(after[kind], r[kind]));
-          return (perParent[0] ?? []).filter((item) => perParent.every((list) => list.includes(item)));
-        };
+        const baseRecords = atBase.map(recordsOf);
+        const from = (kind: 'reviews' | 'evidence' | 'log'): Start<string> =>
+          startingPoint(earlierRecords.map((r) => r[kind]), baseRecords.map((r) => r[kind]), (item) => item);
+        // What the commit starts from is not new, so a merge answers only for what it adds itself.
+        const known = (kind: 'reviews' | 'evidence' | 'log'): string[] => from(kind).allow;
+        // What a commit takes away: it started with it, and it is gone now. A signer can take back only their own.
+        const gone = (kind: 'reviews' | 'evidence' | 'log'): string[] => added(after[kind], from(kind).keep);
         for (const item of added(known('reviews'), after.reviews)) {
           const [claim, by, kind, , , , rev] = JSON.parse(item) as [string, string, string, string, string, string, string];
           if (by !== signer.name) check.problems.push(`${path}: a review of "${claim}" is recorded as by "${by}", but the commit was signed by ${signer.principal}`);
@@ -509,18 +730,24 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
       // only their own name. A label that carries someone else's name cannot be changed, stripped or deleted,
       // except by taking it over in the signer's own name, or by giving the claim support so it stops being a bet.
       const where = changed.length === 1 ? (changed[0] as string) : 'trust labels';
+      type Label = { id: string; trust: string; by?: string };
+      const labelKey = (l: Label): string => JSON.stringify([l.id, l.trust, l.by ?? null]);
+      const labelList = (map: Map<string, { trust: string; by?: string }>): Label[] => [...map].map(([id, label]) => ({ id, ...label }));
+      const labelStart = startingPoint(labelsBefore.map(labelList), labelsAtBase.map(labelList), labelKey);
+      const labelAllowed = new Set(labelStart.allow.map(labelKey));
       for (const [id, label] of labelsNow) {
-        if (labelsBefore.length > 0 && labelsBefore.some((b) => b.get(id)?.trust === label.trust && b.get(id)?.by === label.by)) continue;
+        if (labelAllowed.has(labelKey({ id, ...label }))) continue;
         if (label.by !== undefined && label.by !== signer.name) {
           check.problems.push(`${where}: the trust label on "${id}" is recorded as set by "${label.by}", but the commit was signed by ${signer.principal}`);
         }
       }
-      for (const [id, earlier] of labelsBefore[0] ?? []) {
+      for (const earlier of labelStart.keep) {
+        const id = earlier.id;
         if (earlier.by === undefined || earlier.by === signer.name) continue;
-        // Only what every parent agreed on, and this commit changed, is this commit's doing.
-        if (!labelsBefore.every((b) => b.get(id)?.trust === earlier.trust && b.get(id)?.by === earlier.by)) continue;
         const label = labelsNow.get(id);
         if (label?.trust === earlier.trust && label.by === earlier.by) continue;
+        // Where the two sides of a merge left different labels, keeping either one is not this commit's doing.
+        if (label && labelAllowed.has(labelKey({ id, ...label }))) continue;
         if (label?.by === signer.name || label?.by === earlier.by || supportedNow.has(id)) continue;
         check.problems.push(`${where}: the trust label on "${id}" carried ${earlier.by}'s name, and ${signer.principal} ${label ? 'changed it without putting their own name on it' : 'removed it'}`);
       }

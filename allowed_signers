@@ -21,8 +21,18 @@
 # On a machine without ssh-keygen, "argmap use-key <private key file>" sets a
 # clone up to sign with a small helper that ships with argmap.
 #
-# Text after a key is a free label saying which key it is. Two lines may carry
-# the same name: one identity signing from two places.
+# Text after a key is a label saying which key it is. It is free text, with one
+# reserved word: a label that is "owner", or starts with "owner" and a space,
+# marks an owner.
+#
+# Who may change this file, as "argmap verify" checks it:
+#   - Anyone listed may add a line whose name and key are both new, and were
+#     never on this list before. The name is lowercase letters, digits, dots
+#     and hyphens.
+#   - Only an owner may remove a line, change one, name an owner, bring back a
+#     name or key that was taken off, or give a listed name a second key. Two
+#     lines may carry the same name (one identity signing from two places), and
+#     only an owner can add the second.
 #
 aldrin@person ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJOp/UAYTX6pE/zVydAdoiNfXCeFGgcmVWnykq7GTovu owner
 

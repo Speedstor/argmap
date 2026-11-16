@@ -312,6 +312,45 @@ cannot be dated before the one it builds on, or after the present. It also
 keeps predictions in order: none arrives with its outcome, and none is edited,
 moved or removed afterwards.
 
+The list itself has a rule, because it says which key signs as which name.
+Whoever could edit it freely could add a second key under someone else's name
+and sign as them. So `verify` also checks every commit that changes
+`allowed_signers`:
+
+- Anyone on the list may invite: add a line whose name and key are both new,
+  and were never on the list before. The name is plain: lowercase letters,
+  digits, dots and hyphens, ending in `@person` or `@ai`. Capitals, look-alike
+  letters and characters that do not show could make one name pass for
+  another, so a name with any of those needs an owner.
+- Only an owner may remove a line, change one, give a listed name a second
+  key, put a listed key under another name, bring back a name or key that was
+  taken off, or name an owner.
+
+An owner is a line whose label, the text after the key, starts with the word
+`owner` followed by a space or nothing: `owner` and `owner on a laptop` mark
+one, `owner's old phone` does not. Who is an owner is read from the list on
+`main`, never from the commit being checked, so a commit cannot make its own
+signer an owner. A member who wants to leave asks an owner. A list that names
+no owner is not held to this rule: mark one line `owner` to turn it on. Keep a
+second owner line with a spare key somewhere safe, because if the only owner
+key is lost, nobody can remove or change a line.
+
+A removal sticks. The old reviews still carry the removed name, so whoever is
+listed under it next would sign as their author; only an owner can list a
+name or a key again once it has been taken off.
+
+The rule holds across merges too. A merge is judged against what its parents
+and their common ancestor give between them, the way git merges: a line both
+sides hold, or one side added, belongs; a line one side took off does not. So
+a merge with an old commit cannot hide a removal or bring a replaced key
+back. And a new line is tested against the list it will join, not only the
+one on its own branch: a branch cut before a name was listed cannot add that
+name with another key, and a second history started from nothing cannot be
+merged in with a list of its own. In a pull request the list it joins is the
+one on `main`; when the whole history is read, the merge that brought the
+line in is the commit refused, unless an owner signed that merge. The same
+reading of merges applies to reviews, evidence, log entries and trust labels.
+
 Statuses are worked out from the files as they stand, so `verify` is an alarm
 and not a lock. The digest prints its result at the top: whether every commit
 behind it passes, and if not, which do not.
@@ -350,7 +389,8 @@ npm run argmap -- use-key ~/.ssh/argmap_key
 
 That points this clone's git at the helper and the key, and tells you which
 name on the list the key is trusted as. Records you add must be in that name.
-Text after a key in `allowed_signers` is a free label, shown by `verify`.
+Text after a key in `allowed_signers` is a label, shown by `verify`. It is
+free text, except that a label starting with the word `owner` marks an owner.
 
 Notepads are deliberately outside this: editing one on GitHub from a phone
 produces a commit your own key did not sign, and loose notes do not need the
