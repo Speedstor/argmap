@@ -312,6 +312,23 @@ cannot be dated before the one it builds on, or after the present. It also
 keeps predictions in order: none arrives with its outcome, and none is edited,
 moved or removed afterwards.
 
+The list itself has a rule, because it says which key signs as which name.
+Whoever could edit it freely could add a second key under someone else's name
+and sign as them. So `verify` also checks every commit that changes
+`allowed_signers`:
+
+- Anyone on the list may invite: add a line whose name and key are both new.
+- Only an owner may remove a line, change one, give a listed name a second
+  key, put a listed key under another name, or name an owner.
+
+An owner is a line whose label, the text after the key, starts with the word
+`owner`. Who is an owner is read from the list on `main`, never from the
+commit being checked, so a commit cannot make its own signer an owner. A
+member who wants to leave asks an owner. A list that names no owner is not
+held to this rule: mark one line `owner` to turn it on. Keep a second owner
+line with a spare key somewhere safe, because if the only owner key is lost,
+nobody can remove or change a line.
+
 Statuses are worked out from the files as they stand, so `verify` is an alarm
 and not a lock. The digest prints its result at the top: whether every commit
 behind it passes, and if not, which do not.
@@ -350,7 +367,8 @@ npm run argmap -- use-key ~/.ssh/argmap_key
 
 That points this clone's git at the helper and the key, and tells you which
 name on the list the key is trusted as. Records you add must be in that name.
-Text after a key in `allowed_signers` is a free label, shown by `verify`.
+Text after a key in `allowed_signers` is a label, shown by `verify`. It is
+free text, except that a label starting with the word `owner` marks an owner.
 
 Notepads are deliberately outside this: editing one on GitHub from a phone
 produces a commit your own key did not sign, and loose notes do not need the

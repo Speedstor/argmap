@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { claimRev } from '../src/index.ts';
-import { parseSigners, verifyRange } from '../src/verify.ts';
+import { isOwner, parseSigners, verifyRange } from '../src/verify.ts';
 
 let root: string;
 const run = (args: string[], input?: string): string =>
@@ -651,4 +651,116 @@ test('redefining a library term is seen as rewording the claims that pin it, in 
   const from = head();
   commit({ 'claims/terms.yaml': library('Any premises that sells anything.') }, 'ann widens the term in the library only', ann);
   assert.ok(sinceWith(from).some((p) => /"a" was reworded or rewired while an accepted test of it was waiting/.test(p)));
+});
+
+/* ---------- Who may change the list of trusted keys ---------- */
+
+const olga = makeKey();
+const spare = makeKey();
+const LIST = `olga@person ${olga.listed} owner, on her laptop\nann@person ${ann.listed} Ann's laptop\nmodel-x@ai ${bot.listed}\n`;
+const members = parseSigners(LIST);
+/** A repository of its own whose list names olga as its owner. */
+const startList = (): void => {
+  startOn('2026-11-14');
+  commit({ allowed_signers: LIST }, 'the list as it starts', olga);
+};
+/** What verify says about the newest commit, judged by the list the repository started with. */
+const newest = (list = members): string[] => verifyRange(root, 'HEAD~1..HEAD', list)[0]?.problems ?? [];
+/** The owner puts the list back as it started. An owner may change any line, so this passes. */
+const putBack = (): void => {
+  commit({ allowed_signers: LIST }, 'the owner puts the list back', olga);
+  assert.deepEqual(newest(), []);
+};
+
+test('an owner is a line whose label starts with the word owner', () => {
+  assert.deepEqual(members.map(isOwner), [true, false, false]);
+  const others = parseSigners(`a@person ${spare.listed} the owner's friend\nb@person ${spare.listed} ownership papers\nc@person ${spare.listed}\n`);
+  assert.deepEqual(others.map(isOwner), [false, false, false]);
+});
+
+test('anyone on the list can invite a new name with a new key', () => {
+  startList();
+  commit({ allowed_signers: `${LIST}carol@person ${spare.listed} invited by the model\n` }, 'the model invites carol', bot);
+  assert.deepEqual(newest(), []);
+});
+
+test('only an owner can remove or change a line', () => {
+  startList();
+  commit({ allowed_signers: LIST.replace(/^ann@.*\n/m, '') }, 'the model removes ann', bot);
+  assert.deepEqual(newest(), ['allowed_signers: the line for ann@person was removed by model-x@ai. Only an owner can change or remove a line.']);
+  putBack();
+  commit({ allowed_signers: LIST.replace("Ann's laptop", 'retired') }, 'the model relabels ann', bot);
+  assert.deepEqual(newest(), ['allowed_signers: the line for ann@person was changed by model-x@ai. Only an owner can change or remove a line.']);
+  putBack();
+  commit({ allowed_signers: LIST.replace(ann.listed, spare.listed) }, "the model swaps ann's key for another", bot);
+  assert.deepEqual(newest(), ['allowed_signers: the line for ann@person was changed by model-x@ai. Only an owner can change or remove a line.']);
+  putBack();
+  // Leaving is a removal too: a member asks an owner.
+  commit({ allowed_signers: LIST.replace(/^model-x@.*\n/m, '') }, 'the model removes its own line', bot);
+  assert.match(newest()[0] ?? '', /the line for model-x@ai was removed by model-x@ai/);
+  putBack();
+  commit({ allowed_signers: LIST.replace(/^ann@.*\n/m, '') }, 'the owner removes ann', olga);
+  assert.deepEqual(newest(), []);
+});
+
+test('a listed name cannot be given a second key by anyone but an owner', () => {
+  startList();
+  const twoKeys = `${LIST}olga@person ${spare.listed} second laptop\n`;
+  commit({ allowed_signers: twoKeys }, "the model adds a key under the owner's name", bot);
+  assert.deepEqual(newest(), ['allowed_signers: model-x@ai added another key under the name "olga", which is already on the list. Only an owner can give a name a second key.']);
+  // Why it is refused: were that line trusted, whoever holds the second key would sign as olga.
+  commit({ 'claims/facts.yaml': claims(`    reviews:\n      - { by: olga, kind: person, verdict: confirm, rev: ${FACT} }\n`) }, 'a review as olga, signed with the second key', spare);
+  assert.deepEqual(newest(parseSigners(twoKeys)), []);
+  assert.deepEqual(newest(), ['signed with a key that is not on the list']);
+  // The same name as the other kind is still the same name.
+  putBack();
+  commit({ allowed_signers: `${LIST}ann@ai ${spare.listed}\n` }, 'the model adds ann as an AI', bot);
+  assert.match(newest()[0] ?? '', /added another key under the name "ann"/);
+  // An owner can: one identity signing from two places.
+  putBack();
+  commit({ allowed_signers: twoKeys }, 'the owner adds her second laptop', olga);
+  assert.deepEqual(newest(), []);
+});
+
+test('nobody but an owner can name an owner, or put a listed key under another name', () => {
+  startList();
+  commit({ allowed_signers: `${LIST}dave@person ${spare.listed} owner\n` }, 'the model adds dave as an owner', bot);
+  assert.deepEqual(newest(), ['allowed_signers: model-x@ai added dave@person as an owner. Only an owner can name an owner.']);
+  putBack();
+  // The later of two lines with one key wins, so this would turn ann's commits into zed's.
+  commit({ allowed_signers: `${LIST}zed@person ${ann.listed}\n` }, "the model lists ann's key again as zed", bot);
+  assert.deepEqual(newest(), ['allowed_signers: model-x@ai added zed@person with a key that is already on the list as ann@person. Only an owner can put a key under another name.']);
+});
+
+test('a commit cannot make its own signer an owner', () => {
+  startList();
+  const crowned = LIST.replace(`model-x@ai ${bot.listed}`, `model-x@ai ${bot.listed} owner`).replace(/^ann@.*\n/m, '');
+  commit({ allowed_signers: crowned }, 'the model marks itself owner and removes ann', bot);
+  assert.deepEqual(newest().sort(), [
+    'allowed_signers: the line for ann@person was removed by model-x@ai. Only an owner can change or remove a line.',
+    'allowed_signers: the line for model-x@ai was changed by model-x@ai. Only an owner can change or remove a line.',
+  ]);
+});
+
+test('an edited merge answers for what it does to the list', () => {
+  startList();
+  const { base, a, b } = fork({ allowed_signers: `${LIST}carol@person ${spare.listed}\n` }, { 'right.txt': 'right\n' });
+  // The left side invited carol, which anyone listed may do. The merge then drops ann.
+  run(['reset', '-q', '--hard', a]);
+  run(['merge', '-q', '--no-commit', '--no-ff', b]);
+  writeFileSync(join(root, 'allowed_signers'), `${LIST.replace(/^ann@.*\n/m, '')}carol@person ${spare.listed}\n`);
+  run(['add', '-A']);
+  const edited = run(['write-tree']);
+  run(['merge', '--abort']);
+  const id = mergeCommit([a, b], edited, 'Merge, dropping ann from the list', bot);
+  const checks = verifyRange(root, `${base}..HEAD`, members);
+  assert.deepEqual(checks.find((c) => c.commit === a)?.problems, []);
+  assert.deepEqual(checks.find((c) => c.commit === id)?.problems, ['allowed_signers: the line for ann@person was removed by model-x@ai. Only an owner can change or remove a line.']);
+});
+
+test('a list that names no owner is not held to the rule', () => {
+  startOn('2026-11-14');
+  commit({ allowed_signers: `ann@person ${ann.listed} Ann's laptop\nmodel-x@ai ${bot.listed}\n` }, 'a list with no owner', ann);
+  commit({ allowed_signers: `model-x@ai ${bot.listed}\n` }, 'the model removes ann', bot);
+  assert.deepEqual(newest(signers), []);
 });

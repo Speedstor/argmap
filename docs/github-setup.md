@@ -127,6 +127,8 @@ Create the copy as the README describes under "Keep a private copy". Then:
 ## What is not on this page
 
 - Adding a signing key: see "Who said it: signed access" in the README. A
-  key is added by a pull request that changes `allowed_signers`.
+  key is added by a pull request that changes `allowed_signers`, signed by
+  someone already on the list. Removing or changing a line needs an owner's
+  signature.
 - Everything that lives in files: the workflows, the tests and the tool
   itself arrive with the repository.

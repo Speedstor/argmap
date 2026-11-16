@@ -17,7 +17,10 @@ export interface Signer {
   kind: 'person' | 'ai' | 'unknown';
   /** The public key, base64, as it appears in the list. */
   key: string;
-  /** The comment after the key, if any: a free description of which key this is. */
+  /**
+   * The comment after the key, if any: a description of which key this is.
+   * It is free text, except that a label starting with the word "owner" marks an owner (see isOwner).
+   */
   label?: string;
 }
 
@@ -49,6 +52,57 @@ export function parseSigners(text: string): Signer[] {
     }
   }
   return out;
+}
+
+/**
+ * An owner is a line whose label starts with the word "owner". The list is the
+ * membership of a repository, and an owner is who decides it: only an owner may
+ * remove or change a line (see listProblems).
+ */
+export const isOwner = (signer: Signer | undefined): boolean => /^owner\b/.test(signer?.label ?? '');
+
+/** A line of the list as one string, so that any change to its name, key or label shows. */
+const lineOf = (s: Signer): string => JSON.stringify([s.principal, s.key, s.label ?? '']);
+
+/**
+ * Who may change the list of trusted keys. The list says which key signs as
+ * which name, so whoever can edit it freely can sign as anyone: add a second
+ * key under a listed name, and that key's commits count as that name's.
+ *
+ * Anyone on the list may invite: add a line whose name and key are both new.
+ * Everything else is an owner's to do: removing a line, changing one, giving a
+ * listed name another key, putting a listed key under another name, and naming
+ * an owner.
+ *
+ * `before` holds the list in each parent of the commit, `after` the list in the
+ * commit, and `signer` who signed it. A list that names no owner is not held to
+ * this rule, because there would be nobody who could change it.
+ */
+export function listProblems(before: Signer[][], after: Signer[], signer: Signer, trusted: Signer[]): string[] {
+  if (before.length === 0 || isOwner(signer) || !trusted.some(isOwner)) return [];
+  const has = (list: Signer[], s: Signer): boolean => list.some((x) => lineOf(x) === lineOf(s));
+  // What the commit itself did: a line every parent had and it dropped, or a line no parent had.
+  const dropped = (before[0] ?? []).filter((s) => !has(after, s) && before.every((list) => has(list, s)));
+  const added = after.filter((s) => !before.some((list) => has(list, s)));
+  const earlier = before.flat();
+  const problems: string[] = [];
+  const who = signer.principal;
+  for (const s of dropped) {
+    const still = after.some((x) => x.principal === s.principal);
+    problems.push(`${SIGNERS_FILE}: the line for ${s.principal} was ${still ? 'changed' : 'removed'} by ${who}. Only an owner can change or remove a line.`);
+  }
+  for (const s of added) {
+    // A changed line shows as one dropped and one added. It is reported once, above.
+    if (dropped.some((x) => x.principal === s.principal)) continue;
+    const sameKey = earlier.find((x) => x.key === s.key);
+    if (isOwner(s)) problems.push(`${SIGNERS_FILE}: ${who} added ${s.principal} as an owner. Only an owner can name an owner.`);
+    else if (earlier.some((x) => x.name === s.name)) {
+      problems.push(`${SIGNERS_FILE}: ${who} added another key under the name "${s.name}", which is already on the list. Only an owner can give a name a second key.`);
+    } else if (sameKey) {
+      problems.push(`${SIGNERS_FILE}: ${who} added ${s.principal} with a key that is already on the list as ${sameKey.principal}. Only an owner can put a key under another name.`);
+    }
+  }
+  return problems;
 }
 
 /** Split a raw commit into what was signed and the signature attached to it. */
@@ -353,6 +407,11 @@ function added(before: string[], after: string[]): string[] {
  * mergeKind). A merge that was edited is treated like any other commit: it
  * needs a trusted signature, and what it adds beyond its parents must be in the
  * signer's name.
+ *
+ * A commit that changes the list of trusted keys is held to listProblems:
+ * anyone listed may add a new name, and only an owner may do anything else.
+ * Who is an owner is read from `signers`, the list the range is judged by, and
+ * never from the commit itself, so a commit cannot make its own signer an owner.
  */
 export interface VerifyOptions {
   /** Refuse a prediction and its outcome in the same range. For a pull request: the prediction must be on main first. */
@@ -424,6 +483,10 @@ export function verifyRange(root: string, range: string, signers: Signer[], opti
 
     const signer = check.signer;
     if (signer && merge?.kind !== 'clean') {
+      // The list of trusted keys is membership, so a change to it has a rule of its own.
+      const listAt = (rev: string): Signer[] => parseSigners(tryGit(root, ['show', `${rev}:${SIGNERS_FILE}`]) ?? '');
+      check.problems.push(...listProblems(parents.map(listAt), listAt(commit), signer, signers));
+
       // With -m a merge is compared with each parent in turn; an ordinary commit has one.
       const tracked = (path: string): boolean => /^(arguments|claims)\/.*\.ya?ml$/.test(path);
       let changed = [...new Set(git(root, ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-m', commit]).split('\n').filter(tracked))];
